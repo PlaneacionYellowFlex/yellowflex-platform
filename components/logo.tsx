@@ -1,0 +1,1 @@
+export default function Logo(){return <div>YellowFlex</div>}
