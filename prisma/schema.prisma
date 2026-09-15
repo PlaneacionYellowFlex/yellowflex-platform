@@ -1,0 +1,412 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id                        String                     @id @default(cuid())
+  externalSubject           String?                    @unique
+  email                     String                     @unique
+  name                      String
+  active                    Boolean                    @default(true)
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  passwordHash              String?
+  passwordMustChange        Boolean                    @default(true)
+  passwordUpdatedAt         DateTime?
+  corporateSessions         CorporateSession[]
+  employee                  Employee?                  @relation("CorporateUserEmployee")
+  employeeMovements         EmployeeMovement[]         @relation("EmployeeMovementRegisteredBy")
+  employeeTimeMovements     EmployeeTimeMovement[]     @relation("EmployeeTimeMovementRegisteredBy")
+  publishedWeeks            MenuWeek[]                 @relation("MenuWeekPublisher")
+  updatedWeeks              MenuWeek[]                 @relation("MenuWeekUpdater")
+  roles                     UserRole[]
+  extraordinaryFoodServices FoodExtraordinaryService[] @relation("FoodExtraordinaryAuthorizedBy")
+}
+
+model UserRole {
+  userId String
+  role   CorporateRole
+  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, role])
+}
+
+model CorporateSession {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+}
+
+model Department {
+  id        String     @id @default(cuid())
+  code      String     @unique
+  name      String
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  employees Employee[]
+}
+
+model WorkShift {
+  id              String     @id @default(cuid())
+  code            String     @unique
+  name            String
+  startTime       String
+  endTime         String
+  crossesMidnight Boolean    @default(false)
+  active          Boolean    @default(true)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  employees       Employee[]
+
+  @@index([active])
+}
+
+model Employee {
+  id              String                 @id @default(cuid())
+  employeeNumber  String                 @unique
+  fullName        String
+  departmentId    String
+  status          EmployeeStatus         @default(ACTIVE)
+  pinHash         String
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  position        String?
+  workShiftId     String?
+  pinMustChange   Boolean                @default(true)
+  pinUpdatedAt    DateTime?
+  corporateUserId String?                @unique
+  consumptions    Consumption[]
+  corporateUser   User?                  @relation("CorporateUserEmployee", fields: [corporateUserId], references: [id])
+  department      Department             @relation(fields: [departmentId], references: [id])
+  workShift       WorkShift?             @relation(fields: [workShiftId], references: [id])
+  movements       EmployeeMovement[]
+  profile         EmployeeProfile?       @relation("EmployeeProfileOwner")
+  managedProfiles EmployeeProfile[]      @relation("EmployeeProfileManager")
+  timeMovements   EmployeeTimeMovement[]
+  accessSessions  FoodAccessSession[]
+  foodOrders      FoodOrder[]
+  reservations    Reservation[]
+
+  @@index([departmentId, status])
+  @@index([workShiftId, status])
+}
+
+model EmployeeProfile {
+  id                String        @id @default(cuid())
+  employeeId        String        @unique
+  birthDate         DateTime?     @db.Date
+  hireDate          DateTime?     @db.Date
+  contractType      ContractType?
+  phone             String?
+  email             String?
+  terminationDate   DateTime?     @db.Date
+  terminationReason String?
+  transportRoute    String?
+  photoUrl          String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  managerId         String?
+  employee          Employee      @relation("EmployeeProfileOwner", fields: [employeeId], references: [id], onDelete: Cascade)
+  manager           Employee?     @relation("EmployeeProfileManager", fields: [managerId], references: [id])
+
+  @@index([hireDate])
+  @@index([contractType])
+  @@index([managerId])
+}
+
+model EmployeeMovement {
+  id                     String               @id @default(cuid())
+  employeeId             String
+  type                   EmployeeMovementType
+  effectiveDate          DateTime             @db.Date
+  reason                 String?
+  notes                  String?
+  previousStatus         EmployeeStatus?
+  newStatus              EmployeeStatus?
+  previousPosition       String?
+  newPosition            String?
+  previousDepartmentId   String?
+  previousDepartmentCode String?
+  previousDepartmentName String?
+  newDepartmentId        String?
+  newDepartmentCode      String?
+  newDepartmentName      String?
+  previousWorkShiftId    String?
+  previousWorkShiftCode  String?
+  previousWorkShiftName  String?
+  newWorkShiftId         String?
+  newWorkShiftCode       String?
+  newWorkShiftName       String?
+  registeredById         String?
+  createdAt              DateTime             @default(now())
+  employee               Employee             @relation(fields: [employeeId], references: [id])
+  registeredBy           User?                @relation("EmployeeMovementRegisteredBy", fields: [registeredById], references: [id])
+
+  @@index([employeeId, effectiveDate])
+  @@index([type, effectiveDate])
+  @@index([effectiveDate])
+  @@index([registeredById])
+}
+
+model EmployeeTimeMovement {
+  id             String                   @id @default(cuid())
+  employeeId     String
+  type           EmployeeTimeMovementType
+  reason         EmployeeTimeReason
+  minutes        Int
+  effectiveDate  DateTime                 @db.Date
+  notes          String?
+  registeredById String?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+  employee       Employee                 @relation(fields: [employeeId], references: [id])
+  registeredBy   User?                    @relation("EmployeeTimeMovementRegisteredBy", fields: [registeredById], references: [id])
+
+  @@index([employeeId, effectiveDate])
+  @@index([employeeId, type])
+  @@index([type, effectiveDate])
+  @@index([reason, effectiveDate])
+  @@index([effectiveDate])
+  @@index([registeredById])
+}
+
+model MenuWeek {
+  id            String      @id @default(cuid())
+  weekStart     DateTime    @unique @db.Date
+  status        MenuStatus  @default(DRAFT)
+  publishedAt   DateTime?
+  publishedById String?
+  updatedById   String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  foodOrders    FoodOrder[]
+  days          MenuDay[]
+  publishedBy   User?       @relation("MenuWeekPublisher", fields: [publishedById], references: [id])
+  updatedBy     User?       @relation("MenuWeekUpdater", fields: [updatedById], references: [id])
+}
+
+model MenuDay {
+  id          String     @id @default(cuid())
+  menuWeekId  String
+  serviceDate DateTime   @db.Date
+  menuWeek    MenuWeek   @relation(fields: [menuWeekId], references: [id])
+  items       MenuItem[]
+
+  @@unique([menuWeekId, serviceDate])
+  @@index([serviceDate])
+}
+
+model MenuItem {
+  id                    String                     @id @default(cuid())
+  menuDayId             String
+  serviceType           FoodServiceType
+  name                  String
+  description           String?
+  price                 Decimal                    @db.Decimal(10, 2)
+  available             Boolean                    @default(true)
+  archivedAt            DateTime?
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+  consumptions          Consumption[]
+  menuDay               MenuDay                    @relation(fields: [menuDayId], references: [id])
+  reservations          Reservation[]
+  extraordinaryServices FoodExtraordinaryService[]
+
+  @@index([menuDayId, serviceType, available])
+}
+
+model FoodOrder {
+  id           String          @id @default(cuid())
+  employeeId   String
+  menuWeekId   String
+  status       FoodOrderStatus @default(CONFIRMED)
+  itemCount    Int
+  unitPrice    Decimal         @db.Decimal(10, 2)
+  totalAmount  Decimal         @db.Decimal(10, 2)
+  confirmedAt  DateTime        @default(now())
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  employee     Employee        @relation(fields: [employeeId], references: [id])
+  menuWeek     MenuWeek        @relation(fields: [menuWeekId], references: [id])
+  reservations Reservation[]
+
+  @@unique([employeeId, menuWeekId])
+  @@index([menuWeekId, status])
+  @@index([confirmedAt])
+}
+
+model Reservation {
+  id          String            @id @default(cuid())
+  employeeId  String
+  menuItemId  String
+  status      ReservationStatus @default(ACTIVE)
+  reservedAt  DateTime          @default(now())
+  foodOrderId String?
+  consumption Consumption?
+  employee    Employee          @relation(fields: [employeeId], references: [id])
+  foodOrder   FoodOrder?        @relation(fields: [foodOrderId], references: [id], onDelete: Restrict)
+  menuItem    MenuItem          @relation(fields: [menuItemId], references: [id])
+
+  @@unique([employeeId, menuItemId])
+  @@index([foodOrderId])
+  @@index([reservedAt])
+}
+
+model Consumption {
+  id             String         @id @default(cuid())
+  employeeId     String
+  menuItemId     String
+  reservationId  String?        @unique
+  priceApplied   Decimal        @db.Decimal(10, 2)
+  credentialType CredentialType @default(EMPLOYEE_NUMBER)
+  consumedAt     DateTime       @default(now())
+  employee       Employee       @relation(fields: [employeeId], references: [id])
+  menuItem       MenuItem       @relation(fields: [menuItemId], references: [id])
+  reservation    Reservation?   @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+
+  @@unique([employeeId, menuItemId])
+  @@index([consumedAt])
+}
+
+model FoodExtraordinaryService {
+  id              String                      @id @default(cuid())
+  menuItemId      String
+  guestName       String
+  guestType       FoodExtraordinaryGuestType
+  company         String?
+  quantity        Int                         @default(1)
+  priceApplied    Decimal                     @db.Decimal(10, 2)
+  chargeType      FoodExtraordinaryChargeType
+  areaResponsible String?
+  reason          String
+  notes           String?
+  status          FoodExtraordinaryStatus     @default(ACTIVE)
+  authorizedById  String
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
+  cancelledAt     DateTime?
+  menuItem        MenuItem                    @relation(fields: [menuItemId], references: [id], onDelete: Restrict)
+  authorizedBy    User                        @relation("FoodExtraordinaryAuthorizedBy", fields: [authorizedById], references: [id], onDelete: Restrict)
+
+  @@index([menuItemId, status])
+  @@index([authorizedById, createdAt])
+  @@index([createdAt])
+}
+
+model FoodAccessSession {
+  id         String   @id @default(cuid())
+  employeeId String
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, expiresAt])
+}
+
+enum CorporateRole {
+  ADMIN
+  DIRECCION
+  RH
+  CHEF
+  PLANEACION
+  PRODUCCION
+  MANTENIMIENTO
+  EMPLEADO
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ContractType {
+  INDEFINITE
+  FIXED_TERM
+  TEMPORARY
+  TRAINING
+  OTHER
+}
+
+enum EmployeeMovementType {
+  HIRE
+  POSITION_CHANGE
+  DEPARTMENT_CHANGE
+  SHIFT_CHANGE
+  PROMOTION
+  TERMINATION
+  REHIRE
+}
+
+enum EmployeeTimeMovementType {
+  DEBT
+  RECOVERY
+  CREDIT_ADJUSTMENT
+  DEBIT_ADJUSTMENT
+}
+
+enum EmployeeTimeReason {
+  LATE_ARRIVAL
+  ABSENCE
+  EARLY_DEPARTURE
+  PERMISSION
+  OTHER
+}
+
+enum MenuStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum FoodServiceType {
+  BREAKFAST
+  LUNCH
+}
+
+enum FoodOrderStatus {
+  CONFIRMED
+}
+
+enum ReservationStatus {
+  ACTIVE
+  CANCELLED
+}
+
+enum FoodExtraordinaryGuestType {
+  PROVIDER
+  VISITOR
+  NEW_HIRE
+  OTHER
+}
+
+enum FoodExtraordinaryChargeType {
+  YELLOWFLEX
+  PROVIDER
+  COURTESY
+  OTHER
+}
+
+enum FoodExtraordinaryStatus {
+  ACTIVE
+  CANCELLED
+}
+
+enum CredentialType {
+  EMPLOYEE_NUMBER
+  QR
+  BARCODE
+  NFC
+}

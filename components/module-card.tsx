@@ -1,0 +1,7 @@
+import type { LucideIcon } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
+import Link from "next/link";
+
+export type ModuleCardProps = { name: string; description: string; href: string; icon: LucideIcon; status: string; tone?: "active" | "planned" | "integration" };
+const toneStyles = { active: "bg-emerald-50 text-emerald-700", planned: "bg-amber-50 text-amber-700", integration: "bg-blue-50 text-blue-700" };
+export default function ModuleCard({ name, description, href, icon: Icon, status, tone = "planned" }: ModuleCardProps) { return <Link href={href} className="group flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-lg hover:shadow-blue-950/5"><div className="flex items-start justify-between gap-4"><span className="flex size-11 items-center justify-center rounded-xl bg-[#0b3a82]/[.07] text-[#0b3a82]"><Icon className="size-5" /></span><span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${toneStyles[tone]}`}>{status}</span></div><h2 className="mt-5 text-lg font-bold text-slate-900">{name}</h2><p className="mt-2 text-sm leading-6 text-slate-500">{description}</p><span className="mt-5 flex items-center gap-1.5 text-sm font-semibold text-[#0b3a82]">Abrir módulo <ArrowUpRight className="size-4 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" /></span></Link>; }
