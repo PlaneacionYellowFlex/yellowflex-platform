@@ -78,7 +78,9 @@ export default function LoginPage() {
         return;
       }
 
-      const destination = getDestination(result.data.user.roles);
+      const destination = result.data.user.passwordMustChange
+        ? "/change-password"
+        : getDestination(result.data.user.roles);
 
       router.replace(destination);
       router.refresh();

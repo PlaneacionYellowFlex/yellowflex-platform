@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import Sidebar from "@/components/sidebar";
 import Topbar from "@/components/topbar";
 import { getCurrentCorporateUser } from "@/lib/auth/corporate-auth";
+import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,9 @@ export default async function PlatformLayout({
   if (!user) {
     redirect("/login");
   }
+
+  const credential = await db.user.findUnique({ where: { id: user.id }, select: { passwordMustChange: true } });
+  if (credential?.passwordMustChange) redirect("/change-password");
 
   return (
     <div className="min-h-screen bg-[#f7f9fc]">

@@ -27,6 +27,11 @@ model User {
   updatedWeeks              MenuWeek[]                 @relation("MenuWeekUpdater")
   roles                     UserRole[]
   extraordinaryFoodServices FoodExtraordinaryService[] @relation("FoodExtraordinaryAuthorizedBy")
+  purchasePermission        PurchasePermission?        @relation("PurchasePermissionOwner")
+  purchaseRequests          PurchaseRequest[]          @relation("PurchaseRequester")
+  purchaseDecisions         PurchaseDecision[]         @relation("PurchaseDecisionActor")
+  purchaseDocuments         PurchaseDocument[]         @relation("PurchaseDocumentUploader")
+  purchaseEvents            PurchaseEvent[]            @relation("PurchaseEventActor")
 }
 
 model UserRole {
@@ -314,6 +319,157 @@ model FoodAccessSession {
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   @@index([employeeId, expiresAt])
+}
+
+
+// Seguimiento de Compras: permisos independientes de los roles corporativos.
+model PurchasePermission {
+  userId           String   @id
+  canRequest       Boolean  @default(false)
+  canRequestUrgent Boolean  @default(false)
+  canAuthorize     Boolean  @default(false)
+  canViewAll       Boolean  @default(false)
+  canManagePurchases Boolean @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User     @relation("PurchasePermissionOwner", fields: [userId], references: [id], onDelete: Restrict)
+}
+
+// Los estados de autorizacion y documentacion son independientes.
+model PurchaseRequest {
+  id                   String                      @id @default(cuid())
+  folio                String                      @unique
+  requesterId          String
+  requesterDepartment  String?
+  description          String
+  quantity             Decimal                     @db.Decimal(12, 3)
+  unit                 String
+  justification        String
+  requiredDate         DateTime?                   @db.Date
+  isUrgent             Boolean                     @default(false)
+  urgencyReason        String?
+  authorizationStatus  PurchaseAuthorizationStatus @default(PENDING)
+  documentStatus       PurchaseDocumentStatus      @default(PENDING)
+  purchasedAt          DateTime?
+  purchaseRecordedAt   DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+  requester            User                        @relation("PurchaseRequester", fields: [requesterId], references: [id], onDelete: Restrict)
+  decisions            PurchaseDecision[]
+  documents            PurchaseDocument[]
+  events               PurchaseEvent[]
+  items                PurchaseRequestItem[]
+
+  @@index([requesterId, createdAt])
+  @@index([authorizationStatus, createdAt])
+  @@index([documentStatus, createdAt])
+  @@index([isUrgent, authorizationStatus])
+}
+
+
+model PurchaseRequestItem {
+  id          String          @id @default(cuid())
+  requestId   String
+  description String
+  quantity    Decimal         @db.Decimal(12, 3)
+  unit        String
+  position    Int             @default(0)
+  createdAt   DateTime        @default(now())
+  request     PurchaseRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+
+  @@index([requestId, position])
+}
+
+model PurchaseDecision {
+  id          String               @id @default(cuid())
+  requestId   String
+  decidedById String
+  decision    PurchaseDecisionType
+  reason      String?
+  createdAt   DateTime             @default(now())
+  request     PurchaseRequest      @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  decidedBy   User                 @relation("PurchaseDecisionActor", fields: [decidedById], references: [id], onDelete: Restrict)
+
+  @@index([requestId, createdAt])
+  @@index([decidedById, createdAt])
+}
+
+model PurchaseDocument {
+  id           String               @id @default(cuid())
+  requestId    String
+  type         PurchaseDocumentType
+  originalName String
+  storageKey   String               @unique
+  mimeType     String
+  sizeBytes    Int
+  checksum     String
+  uploadedById String
+  supersededAt DateTime?
+  supersededById String?
+  replacementReason String?
+  createdAt    DateTime             @default(now())
+  request      PurchaseRequest      @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  uploadedBy   User                 @relation("PurchaseDocumentUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  supersededBy PurchaseDocument?    @relation("PurchaseDocumentVersions", fields: [supersededById], references: [id], onDelete: Restrict)
+  previousVersions PurchaseDocument[] @relation("PurchaseDocumentVersions")
+
+  @@index([requestId, type, createdAt])
+  @@index([uploadedById, createdAt])
+}
+
+model PurchaseEvent {
+  id        String            @id @default(cuid())
+  requestId String
+  actorId   String
+  eventType PurchaseEventType
+  details   Json?
+  createdAt DateTime          @default(now())
+  request   PurchaseRequest   @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  actor     User              @relation("PurchaseEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([requestId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+enum PurchaseAuthorizationStatus {
+  PENDING
+  INFORMATION_REQUIRED
+  AUTHORIZED
+  REJECTED
+  REGULARIZATION_PENDING
+  REGULARIZED
+  REGULARIZATION_REJECTED
+}
+
+enum PurchaseDocumentStatus {
+  PENDING
+  INVOICE_PENDING
+  COMPLETE
+}
+
+enum PurchaseDecisionType {
+  AUTHORIZE
+  REJECT
+  REQUEST_INFORMATION
+  REGULARIZE
+  REJECT_REGULARIZATION
+}
+
+enum PurchaseDocumentType {
+  QUOTATION
+  INVOICE
+}
+
+enum PurchaseEventType {
+  REQUEST_CREATED
+  REQUEST_UPDATED
+  INFORMATION_PROVIDED
+  DECISION_RECORDED
+  PURCHASE_RECORDED
+  DOCUMENT_UPLOADED
+  DOCUMENT_SUPERSEDED
+  DOCUMENT_COMPLETED
 }
 
 enum CorporateRole {

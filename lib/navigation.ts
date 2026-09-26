@@ -5,7 +5,6 @@ import {
   ChefHat,
   ClipboardCheck,
   LayoutDashboard,
-  PackageSearch,
   Settings,
   ShieldCheck,
   ShoppingCart,
@@ -48,19 +47,16 @@ export const primaryNavigation: NavigationItem[] = [
     description: "Inteligencia operativa",
   },
   {
+    label: "Compras",
+    href: "/modules/purchases",
+    icon: ShoppingCart,
+    description: "Solicitudes, autorizaciones y expediente documental",
+  },
+  {
     label: "Mantenimiento",
     href: "/modules/mantenimiento",
     icon: Wrench,
-    description: "Gestión de activos",
-  },
-];
-
-export const futureNavigation: NavigationItem[] = [
-  {
-    label: "Compras",
-    icon: ShoppingCart,
-    description: "Abastecimiento y proveedores",
-    comingSoon: true,
+    description: "Gestión de activos y mantenimiento",
   },
   {
     label: "Almacén",
@@ -88,12 +84,14 @@ export const futureNavigation: NavigationItem[] = [
   },
 ];
 
+export const futureNavigation: NavigationItem[] = [];
+
 export const secondaryNavigation: NavigationItem[] = [
   {
     label: "Configuración",
     href: "/settings",
     icon: Settings,
-    description: "Preferencias de la plataforma",
+    description: "Preferencias y administración de la plataforma",
   },
 ];
 
@@ -145,6 +143,11 @@ const pageContexts: Record<
     section: "Módulos",
     description: "Inteligencia operativa",
   },
+  "/modules/purchases": {
+    title: "Compras",
+    section: "Módulos",
+    description: "Solicitudes y seguimiento de compras",
+  },
   "/modules/mantenimiento": {
     title: "Mantenimiento",
     section: "Módulos",
@@ -154,6 +157,11 @@ const pageContexts: Record<
     title: "Configuración",
     section: "Plataforma",
     description: "Preferencias y administración",
+  },
+  "/settings/corporate-access": {
+    title: "Usuarios y accesos",
+    section: "Configuración",
+    description: "Administración de accesos corporativos",
   },
 };
 
