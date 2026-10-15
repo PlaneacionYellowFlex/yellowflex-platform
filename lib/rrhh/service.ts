@@ -5,6 +5,7 @@ import { RrhhServiceError } from "@/lib/rrhh/errors";
 import type {
   EmployeeMovementInput,
   EmployeeProfileInput,
+  EmployeeHierarchyInput,
 } from "@/lib/rrhh/validation";
 
 const employeeSelect = {
@@ -37,6 +38,7 @@ const employeeSelect = {
       birthDate: true,
       hireDate: true,
       managerId: true,
+      managerUserId: true,
       manager: {
         select: {
           id: true,
@@ -50,6 +52,13 @@ const employeeSelect = {
               name: true,
             },
           },
+        },
+      },
+      managerUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
         },
       },
       contractType: true,
@@ -104,6 +113,12 @@ export async function getEmployeeById(id: string) {
           newWorkShiftId: true,
           newWorkShiftCode: true,
           newWorkShiftName: true,
+          previousManagerId: true,
+          previousManagerName: true,
+          previousManagerUserId: true,
+          newManagerId: true,
+          newManagerName: true,
+          newManagerUserId: true,
           registeredById: true,
           registeredBy: {
             select: {
@@ -182,6 +197,182 @@ export async function updateEmployeeProfile(
       createdAt: true,
       updatedAt: true,
     },
+  });
+}
+
+export async function getEmployeeHierarchyCatalog(employeeId: string) {
+  const [employee, employees, directionUsers] = await Promise.all([
+    db.employee.findUnique({
+      where: { id: employeeId },
+      select: {
+        id: true,
+        fullName: true,
+        profile: {
+          select: {
+            managerId: true,
+            managerUserId: true,
+            manager: {
+              select: {
+                id: true,
+                employeeNumber: true,
+                fullName: true,
+                position: true,
+                department: { select: { name: true } },
+              },
+            },
+            managerUser: {
+              select: { id: true, name: true, email: true },
+            },
+          },
+        },
+      },
+    }),
+    db.employee.findMany({
+      where: { status: "ACTIVE", id: { not: employeeId } },
+      select: {
+        id: true,
+        employeeNumber: true,
+        fullName: true,
+        position: true,
+        department: { select: { name: true } },
+      },
+      orderBy: { fullName: "asc" },
+    }),
+    db.user.findMany({
+      where: {
+        active: true,
+        employee: { is: null },
+        roles: { some: { role: "DIRECCION" } },
+      },
+      select: { id: true, name: true, email: true },
+      orderBy: { name: "asc" },
+    }),
+  ]);
+
+  if (!employee) {
+    throw new RrhhServiceError("El colaborador no fue encontrado.", 404, "EMPLOYEE_NOT_FOUND");
+  }
+
+  return { employee, employees, directionUsers };
+}
+
+export async function updateEmployeeHierarchy(
+  employeeId: string,
+  input: EmployeeHierarchyInput,
+  registeredById: string,
+) {
+  return db.$transaction(async (tx) => {
+    const employee = await tx.employee.findUnique({
+      where: { id: employeeId },
+      select: {
+        id: true,
+        fullName: true,
+        status: true,
+        profile: {
+          select: {
+            managerId: true,
+            managerUserId: true,
+            manager: { select: { id: true, fullName: true } },
+            managerUser: { select: { id: true, name: true } },
+          },
+        },
+      },
+    });
+
+    if (!employee) {
+      throw new RrhhServiceError("El colaborador no fue encontrado.", 404, "EMPLOYEE_NOT_FOUND");
+    }
+    if (employee.status !== "ACTIVE") {
+      throw new RrhhServiceError("No se puede asignar jerarquía a un colaborador inactivo.", 409, "EMPLOYEE_INACTIVE");
+    }
+    if (input.managerId === employeeId) {
+      throw new RrhhServiceError("Un colaborador no puede ser su propio jefe inmediato.", 409, "SELF_MANAGER");
+    }
+
+    let newManagerName: string | null = null;
+
+    if (input.managerId) {
+      const manager = await tx.employee.findUnique({
+        where: { id: input.managerId },
+        select: { id: true, fullName: true, status: true },
+      });
+      if (!manager || manager.status !== "ACTIVE") {
+        throw new RrhhServiceError("El jefe inmediato seleccionado no existe o está inactivo.", 422, "INVALID_MANAGER");
+      }
+      newManagerName = manager.fullName;
+
+      let cursor: string | null = manager.id;
+      const visited = new Set<string>();
+      while (cursor) {
+        if (cursor === employeeId) {
+          throw new RrhhServiceError("La asignación generaría un ciclo en la jerarquía organizacional.", 409, "HIERARCHY_CYCLE");
+        }
+        if (visited.has(cursor)) break;
+        visited.add(cursor);
+        const next: { profile: { managerId: string | null } | null } | null = await tx.employee.findUnique({
+          where: { id: cursor },
+          select: { profile: { select: { managerId: true } } },
+        });
+        cursor = next?.profile?.managerId ?? null;
+      }
+    }
+
+    if (input.managerUserId) {
+      const managerUser = await tx.user.findFirst({
+        where: {
+          id: input.managerUserId,
+          active: true,
+          employee: { is: null },
+          roles: { some: { role: "DIRECCION" } },
+        },
+        select: { id: true, name: true },
+      });
+      if (!managerUser) {
+        throw new RrhhServiceError("La cuenta de Dirección seleccionada no es válida.", 422, "INVALID_DIRECTION_MANAGER");
+      }
+      newManagerName = managerUser.name;
+    }
+
+    const previousManagerName = employee.profile?.manager?.fullName ?? employee.profile?.managerUser?.name ?? null;
+    const unchanged =
+      (employee.profile?.managerId ?? null) === input.managerId &&
+      (employee.profile?.managerUserId ?? null) === input.managerUserId;
+    if (unchanged) {
+      throw new RrhhServiceError("El jefe seleccionado es el mismo que tiene actualmente.", 409, "MANAGER_UNCHANGED");
+    }
+
+    await tx.employeeProfile.upsert({
+      where: { employeeId },
+      create: {
+        employeeId,
+        managerId: input.managerId,
+        managerUserId: input.managerUserId,
+      },
+      update: {
+        managerId: input.managerId,
+        managerUserId: input.managerUserId,
+      },
+    });
+
+    const movement = await tx.employeeMovement.create({
+      data: {
+        employeeId,
+        type: "MANAGER_CHANGE",
+        effectiveDate: toDatabaseDate(input.effectiveDate),
+        reason: input.reason,
+        notes: input.notes,
+        previousManagerId: employee.profile?.managerId ?? null,
+        previousManagerUserId: employee.profile?.managerUserId ?? null,
+        previousManagerName,
+        newManagerId: input.managerId,
+        newManagerUserId: input.managerUserId,
+        newManagerName,
+        registeredById,
+      },
+      select: { id: true },
+    });
+
+    return { movementId: movement.id, managerName: newManagerName };
   });
 }
 

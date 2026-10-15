@@ -1,4 +1,4 @@
-import { z } from "zod";
+﻿import { z } from "zod";
 
 const optionalDate = z
   .string()
@@ -190,3 +190,23 @@ function addRequiredIssue(
     message,
   });
 }
+
+export const employeeHierarchySchema = z
+  .object({
+    managerId: z.string().trim().min(1).max(100).nullable(),
+    managerUserId: z.string().trim().min(1).max(100).nullable(),
+    effectiveDate: requiredDate,
+    reason: requiredText(250),
+    notes: optionalText(1000),
+  })
+  .superRefine((input, ctx) => {
+    if (Boolean(input.managerId) === Boolean(input.managerUserId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["managerId"],
+        message: "Selecciona un jefe inmediato o una cuenta de Dirección.",
+      });
+    }
+  });
+
+export type EmployeeHierarchyInput = z.infer<typeof employeeHierarchySchema>;

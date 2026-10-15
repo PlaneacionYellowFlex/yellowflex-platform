@@ -101,10 +101,10 @@ export default function CorporateAccessPage() {
   const [search, setSearch] = useState("");
   const [employeeId, setEmployeeId] = useState("");
   const [userId, setUserId] = useState("");
-  const [mode, setMode] = useState<"none" | "create" | "edit">("none");
+  const [mode, setMode] = useState<"none" | "create" | "createInstitutional" | "edit">("none");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState("EMPLEADO");
+  const [selectedRoles, setSelectedRoles] = useState<string[]>(["EMPLEADO"]);
   const [active, setActive] = useState(true);
   const [permissions, setPermissions] = useState<Permissions>({ ...emptyPermissions });
   const [initialPassword, setInitialPassword] = useState("");
@@ -170,7 +170,7 @@ export default function CorporateAccessPage() {
     setEmployeeId(user.employee?.id ?? "");
     setName(user.name);
     setEmail(user.email);
-    setRole(user.roles[0] ?? "EMPLEADO");
+    setSelectedRoles(user.roles.length ? user.roles : ["EMPLEADO"]);
     setActive(user.active);
     setPermissions({ ...user.purchasePermissions });
   }
@@ -187,9 +187,21 @@ export default function CorporateAccessPage() {
     setUserId("");
     setName(employee.fullName);
     setEmail("");
-    setRole("EMPLEADO");
+    setSelectedRoles(["EMPLEADO"]);
     setActive(true);
     setPermissions({ ...emptyPermissions, canRequest: true });
+  }
+
+  function createInstitutional() {
+    clearMessages();
+    setMode("createInstitutional");
+    setEmployeeId("");
+    setUserId("");
+    setName("");
+    setEmail("");
+    setSelectedRoles(["DIRECCION"]);
+    setActive(true);
+    setPermissions({ ...emptyPermissions });
   }
 
   function changePermission(key: PermissionKey, value: boolean) {
@@ -203,7 +215,8 @@ export default function CorporateAccessPage() {
 
   async function create(event: FormEvent) {
     event.preventDefault();
-    if (!selectedEmployee) return;
+    const isInstitutional = mode === "createInstitutional";
+    if (!isInstitutional && !selectedEmployee) return;
     setBusy(true);
     clearMessages();
     try {
@@ -214,15 +227,15 @@ export default function CorporateAccessPage() {
         body: JSON.stringify({
           name,
           email,
-          employeeId: selectedEmployee.id,
-          role,
+          employeeId: isInstitutional ? null : selectedEmployee?.id ?? null,
+          roles: selectedRoles,
           purchasePermissions: permissions,
         }),
       });
       const data = (await response.json()) as ResponseBody;
       if (!response.ok) throw new Error(data.error ?? "No se pudo crear la cuenta.");
       setInitialPassword(data.initialPassword ?? "");
-      setSuccess("Cuenta creada, vinculada y con permisos aplicados.");
+      setSuccess(isInstitutional ? "Cuenta institucional creada correctamente." : "Cuenta creada, vinculada y con permisos aplicados.");
       await load();
       setMode("none");
       setEmployeeId("");
@@ -248,8 +261,9 @@ export default function CorporateAccessPage() {
           userId: selectedUser.id,
           name,
           email,
-          role,
+          roles: selectedRoles,
           active,
+          employeeId: employeeId || null,
           purchasePermissions: permissions,
         }),
       });
@@ -332,6 +346,11 @@ export default function CorporateAccessPage() {
               );
             })}
           </div>
+          <div className="border-t bg-slate-50 p-4">
+            <button type="button" onClick={createInstitutional} className="flex w-full items-center justify-center gap-2 rounded-xl border border-[#0b3a82]/15 bg-white px-4 py-3 text-sm font-bold text-[#0b3a82] shadow-sm transition hover:bg-blue-50">
+              <UserPlus className="size-4" /> Nueva cuenta institucional
+            </button>
+          </div>
           {institutional.length > 0 && (
             <div className="border-t bg-slate-50 p-4">
               <p className="text-xs font-bold uppercase text-slate-500">Cuentas institucionales / externas</p>
@@ -353,11 +372,11 @@ export default function CorporateAccessPage() {
               <p className="mt-2 text-sm text-slate-500">Crea un acceso nuevo o modifica uno existente.</p>
             </div>
           ) : (
-            <form onSubmit={mode === "create" ? create : save} className="space-y-6">
+            <form onSubmit={mode === "edit" ? save : create} className="space-y-6">
               <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-amber-700">{mode === "create" ? "Crear acceso" : "Editar acceso"}</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-amber-700">{mode === "edit" ? "Editar acceso" : mode === "createInstitutional" ? "Nueva cuenta institucional" : "Crear acceso"}</p>
                 <h2 className="mt-1 text-xl font-bold text-blue-950">
-                  {mode === "create" ? selectedEmployee?.fullName : selectedUser?.employee?.fullName ?? selectedUser?.name}
+                  {mode === "create" ? selectedEmployee?.fullName : mode === "createInstitutional" ? "Dirección / cuenta externa" : selectedUser?.employee?.fullName ?? selectedUser?.name}
                 </h2>
                 {(selectedEmployee || selectedUser?.employee) && (
                   <p className="mt-1 text-sm text-slate-500">
@@ -367,20 +386,43 @@ export default function CorporateAccessPage() {
               </div>
 
               <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-950">
-                Puesto y departamento pertenecen a RH. Aquí modificas el acceso digital a Platform.
+                {mode === "createInstitutional" ? "Esta cuenta no requiere un registro Employee. Úsala para Dirección o cuentas corporativas/externas autorizadas." : "Puesto y departamento pertenecen a RH. Aquí modificas el acceso digital a Platform."}
               </div>
+
+              {mode === "edit" && (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-sm font-bold text-blue-950">Colaborador vinculado</p>
+                  <p className="mt-1 text-xs text-slate-500">Vincula la cuenta institucional con la persona real del maestro de RH.</p>
+                  <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} className="mt-3 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm">
+                    <option value="">Sin colaborador vinculado</option>
+                    {employees.filter((employee) => !employee.corporateUserId || employee.corporateUserId === selectedUser?.id).map((employee) => (
+                      <option key={employee.id} value={employee.id}>#{employee.employeeNumber} · {employee.fullName} · {employee.position || "Puesto no registrado"}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Nombre de cuenta"><input required minLength={3} value={name} onChange={(e) => setName(e.target.value)} className="mt-2 w-full rounded-xl border p-3 font-normal" /></Field>
                 <Field label="Correo electrónico"><input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="mt-2 w-full rounded-xl border p-3 font-normal" /></Field>
-                <Field label="Perfil de acceso">
-                  <select value={role} onChange={(e) => setRole(e.target.value)} className="mt-2 w-full rounded-xl border bg-white p-3 font-normal">
-                    {roles.map((r) => <option key={r} value={r}>{roleLabel[r]}</option>)}
-                  </select>
-                </Field>
+                <div className="sm:col-span-2">
+                  <p className="text-sm font-semibold text-slate-700">Perfiles de acceso</p>
+                  <p className="mt-1 text-xs text-slate-500">Una cuenta puede conservar su función corporativa y además recibir privilegios administrativos.</p>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {roles.map((r) => {
+                      const checked = selectedRoles.includes(r);
+                      return (
+                        <label key={r} className={`flex items-center gap-3 rounded-xl border p-3 text-sm ${checked ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-white"}`}>
+                          <input type="checkbox" checked={checked} onChange={(e) => setSelectedRoles((current) => e.target.checked ? Array.from(new Set([...current, r])) : (current.length > 1 ? current.filter((value) => value !== r) : current))} className="size-4 accent-[#0b3a82]" />
+                          <span className="font-semibold text-slate-700">{roleLabel[r]}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
                 <div className="rounded-xl border p-3">
                   <p className="text-sm font-semibold">Estado de cuenta</p>
-                  <label className="mt-3 flex gap-2 text-sm"><input type="checkbox" checked={active} disabled={mode === "create"} onChange={(e) => setActive(e.target.checked)} />{active ? "Activa" : "Desactivada"}</label>
+                  <label className="mt-3 flex gap-2 text-sm"><input type="checkbox" checked={active} disabled={mode !== "edit"} onChange={(e) => setActive(e.target.checked)} />{active ? "Activa" : "Desactivada"}</label>
                 </div>
               </div>
 
@@ -397,8 +439,8 @@ export default function CorporateAccessPage() {
               </div>
 
               <button disabled={busy} className="flex w-full justify-center gap-2 rounded-xl bg-[#0b3a82] p-3.5 text-sm font-bold text-white disabled:opacity-50">
-                {busy ? <Loader2 className="size-5 animate-spin" /> : mode === "create" ? <UserPlus className="size-5" /> : <CheckCircle2 className="size-5" />}
-                {busy ? "Guardando..." : mode === "create" ? "Crear acceso a Platform" : "Guardar cambios"}
+                {busy ? <Loader2 className="size-5 animate-spin" /> : mode !== "edit" ? <UserPlus className="size-5" /> : <CheckCircle2 className="size-5" />}
+                {busy ? "Guardando..." : mode !== "edit" ? "Crear acceso a Platform" : "Guardar cambios"}
               </button>
             </form>
           )}

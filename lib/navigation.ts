@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Building2,
+  CalendarCheck2,
   ChartNoAxesCombined,
   ChefHat,
   ClipboardCheck,
@@ -35,6 +36,12 @@ export const primaryNavigation: NavigationItem[] = [
     description: "Comedor y servicios alimentarios",
   },
   {
+    label: "Mi RH",
+    href: "/modules/my-rh",
+    icon: CalendarCheck2,
+    description: "Vacaciones, permisos e incidencias",
+  },
+  {
     label: "Recursos Humanos",
     href: "/modules/rrhh",
     icon: Building2,
@@ -60,9 +67,9 @@ export const primaryNavigation: NavigationItem[] = [
   },
   {
     label: "Almacén",
+    href: "/modules/warehouse",
     icon: Warehouse,
     description: "Inventarios y movimientos",
-    comingSoon: true,
   },
   {
     label: "Calidad",
@@ -133,10 +140,20 @@ const pageContexts: Record<
     section: "Food Services",
     description: "Operación",
   },
+  "/modules/my-rh": {
+    title: "Mi RH",
+    section: "Recursos Humanos",
+    description: "Vacaciones, permisos e incidencias",
+  },
   "/modules/rrhh": {
     title: "Recursos Humanos",
     section: "Módulos",
     description: "Personas y organización",
+  },
+  "/modules/rrhh/requests": {
+    title: "Solicitudes e incidencias",
+    section: "Recursos Humanos",
+    description: "Bandeja de autorización de RH",
   },
   "/modules/control-tower": {
     title: "Control Tower",

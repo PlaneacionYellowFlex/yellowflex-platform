@@ -23,6 +23,7 @@ import { notFound } from "next/navigation";
 import EmployeeMovementForm from "@/components/rrhh/employee-movement-form";
 import EmployeeCredentialCard from "@/components/rrhh/employee-credential-card";
 import EmployeeProfileForm from "@/components/rrhh/employee-profile-form";
+import EmployeeHierarchyForm from "@/components/rrhh/employee-hierarchy-form";
 import { getEmployeeById } from "@/lib/rrhh/service";
 
 export const dynamic = "force-dynamic";
@@ -45,6 +46,8 @@ export default async function EmployeePage({
 
   const profile = employee.profile;
   const manager = profile?.manager;
+  const managerUser = profile?.managerUser;
+  const managerName = manager?.fullName ?? managerUser?.name ?? null;
   const movements = employee.movements;
 
   return (
@@ -176,7 +179,7 @@ export default async function EmployeePage({
 
               <InformationItem
                 label="Jefe directo"
-                value={manager?.fullName ?? "Sin información"}
+                value={managerName ?? "Sin información"}
                 secondary={
                   manager
                     ? [
@@ -186,7 +189,9 @@ export default async function EmployeePage({
                       ]
                         .filter(Boolean)
                         .join(" · ")
-                    : undefined
+                    : managerUser
+                      ? `Dirección · ${managerUser.email}`
+                      : undefined
                 }
                 icon={UsersRound}
               />
@@ -235,6 +240,20 @@ export default async function EmployeePage({
                 icon={Bus}
               />
             </InformationGrid>
+          </InformationCard>
+
+          <InformationCard
+            eyebrow="Administración RH"
+            title="Jerarquía organizacional"
+            icon={UsersRound}
+          >
+            <p className="mb-6 max-w-3xl text-sm leading-6 text-slate-500">
+              Define quién autoriza directamente al colaborador. Los cambios quedan registrados con fecha, motivo y usuario responsable.
+            </p>
+            <EmployeeHierarchyForm
+              employeeId={employee.id}
+              currentManagerName={managerName}
+            />
           </InformationCard>
 
           <InformationCard
@@ -509,7 +528,8 @@ type EmployeeMovementRecord = {
     | "SHIFT_CHANGE"
     | "PROMOTION"
     | "TERMINATION"
-    | "REHIRE";
+    | "REHIRE"
+    | "MANAGER_CHANGE";
   effectiveDate: Date;
   reason: string | null;
   notes: string | null;
@@ -521,6 +541,12 @@ type EmployeeMovementRecord = {
   newDepartmentName: string | null;
   previousWorkShiftName: string | null;
   newWorkShiftName: string | null;
+  previousManagerId: string | null;
+  previousManagerName: string | null;
+  previousManagerUserId: string | null;
+  newManagerId: string | null;
+  newManagerName: string | null;
+  newManagerUserId: string | null;
   registeredBy: {
     id: string;
     name: string;
@@ -655,6 +681,14 @@ function getMovementChanges(movement: EmployeeMovementRecord) {
     });
   }
 
+  if (movement.type === "MANAGER_CHANGE") {
+    changes.push({
+      label: "Jefe inmediato",
+      previous: movement.previousManagerName ?? "Sin jefe asignado",
+      next: movement.newManagerName ?? "Sin jefe asignado",
+    });
+  }
+
   return changes;
 }
 
@@ -676,6 +710,8 @@ function formatMovementType(
       return "Baja";
     case "REHIRE":
       return "Reingreso";
+    case "MANAGER_CHANGE":
+      return "Cambio de jefe inmediato";
   }
 }
 

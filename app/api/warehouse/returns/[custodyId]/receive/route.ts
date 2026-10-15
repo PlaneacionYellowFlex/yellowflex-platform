@@ -1,0 +1,9 @@
+import { randomUUID } from "crypto";
+import { NextResponse } from "next/server";
+import { apiError } from "@/lib/api-response";
+import { CorporateAuthorizationRequired, requireCorporateUser } from "@/lib/auth/corporate-auth";
+import { InvalidProductionCustodyOperationError, receiveWarehouseReturn } from "@/repositories/warehouse-custody.repository";
+import { getWarehousePermission } from "@/repositories/warehouse.repository";
+async function access(){ const u=await requireCorporateUser(); if(u.roles.some(r=>r==="ADMIN"||r==="DIRECCION")) return u; const p=await getWarehousePermission(u.id); if(p?.canRegisterMovement) return u; throw new CorporateAuthorizationRequired("No tienes permiso para recibir devoluciones de Almacén."); }
+function folio(){ const d=new Date(); const y=d.getFullYear(); const m=String(d.getMonth()+1).padStart(2,"0"); const day=String(d.getDate()).padStart(2,"0"); return `IM-${y}${m}${day}-${randomUUID().replaceAll("-","").slice(0,10).toUpperCase()}`; }
+export async function POST(request:Request,context:{params:Promise<{custodyId:string}>}){ try{ const user=await access(); const {custodyId}=await context.params; const body=await request.json(); const result=await receiveWarehouseReturn({custodyId,movementFolio:folio(),receivedQuantity:Number(body.receivedQuantity),destinationLocationId:typeof body.destinationLocationId==="string"?body.destinationLocationId:"",notes:typeof body.notes==="string"?body.notes:null,actorId:user.id,occurredAt:new Date()}); return NextResponse.json({movementFolio:result.movement.folio,custodyFolio:result.custodyFolio,returnedQuantity:result.returnedQuantity,unit:result.unit,item:result.item,destination:{code:result.destination.code,name:result.destination.name}}); } catch(error){ if(error instanceof InvalidProductionCustodyOperationError) return NextResponse.json({error:error.message},{status:409}); return apiError(error); } }

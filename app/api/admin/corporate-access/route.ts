@@ -35,7 +35,7 @@ const createSchema = z.object({
   email: z.string().trim().email().max(254),
   name: z.string().trim().min(3).max(160),
   employeeId: z.string().min(1).nullable(),
-  role: z.enum(roles),
+  roles: z.array(z.enum(roles)).min(1),
   purchasePermissions: purchaseSchema,
 }).strict();
 
@@ -43,8 +43,9 @@ const updateSchema = z.object({
   userId: z.string().min(1),
   email: z.string().trim().email().max(254),
   name: z.string().trim().min(3).max(160),
-  role: z.enum(roles),
+  roles: z.array(z.enum(roles)).min(1),
   active: z.boolean(),
+  employeeId: z.string().min(1).nullable(),
   purchasePermissions: purchaseSchema,
 }).strict();
 
@@ -143,7 +144,7 @@ export async function POST(request: Request) {
     const pError = permissionError(input.purchasePermissions);
     if (pError) return NextResponse.json({ error: pError }, { status: 422 });
 
-    if (input.role !== "DIRECCION" && !input.employeeId) {
+    if (!input.roles.includes("DIRECCION") && !input.employeeId) {
       return NextResponse.json(
         { error: "Selecciona un colaborador existente." },
         { status: 422 },
@@ -174,7 +175,7 @@ export async function POST(request: Request) {
           name: input.name,
           passwordHash,
           passwordMustChange: true,
-          roles: { create: [{ role: input.role }] },
+          roles: { create: input.roles.map((role) => ({ role })) },
           purchasePermission: { create: input.purchasePermissions },
         },
         select: { id: true, name: true, email: true },
@@ -226,7 +227,7 @@ export async function PATCH(request: Request) {
         { status: 422 },
       );
     }
-    if (actor.id === input.userId && input.role !== "ADMIN") {
+    if (actor.id === input.userId && !input.roles.includes("ADMIN")) {
       return NextResponse.json(
         { error: "No puedes retirar tu propio rol ADMIN desde esta pantalla." },
         { status: 422 },
@@ -244,14 +245,28 @@ export async function PATCH(request: Request) {
       );
     }
 
+    if (input.employeeId) {
+      const employee = await db.employee.findUnique({
+        where: { id: input.employeeId },
+        select: { status: true, corporateUserId: true },
+      });
+      if (!employee || employee.status !== "ACTIVE") {
+        return NextResponse.json({ error: "El colaborador seleccionado no está activo." }, { status: 409 });
+      }
+      if (employee.corporateUserId && employee.corporateUserId !== input.userId) {
+        return NextResponse.json({ error: "El colaborador ya está vinculado a otra cuenta." }, { status: 409 });
+      }
+    }
+
     await db.$transaction(async (tx) => {
       await tx.user.update({
         where: { id: input.userId },
         data: { name: input.name, email, active: input.active },
       });
       await tx.userRole.deleteMany({ where: { userId: input.userId } });
-      await tx.userRole.create({
-        data: { userId: input.userId, role: input.role },
+      await tx.userRole.createMany({
+        data: input.roles.map((role) => ({ userId: input.userId, role })),
+        skipDuplicates: true,
       });
       await tx.purchasePermission.upsert({
         where: { userId: input.userId },

@@ -32,6 +32,18 @@ model User {
   purchaseDecisions         PurchaseDecision[]         @relation("PurchaseDecisionActor")
   purchaseDocuments         PurchaseDocument[]         @relation("PurchaseDocumentUploader")
   purchaseEvents            PurchaseEvent[]            @relation("PurchaseEventActor")
+  hrRequestDecisions        HrRequestDecision[]        @relation("HrRequestDecisionActor")
+  hrRequestEvents           HrRequestEvent[]           @relation("HrRequestEventActor")
+  managedEmployeeProfiles   EmployeeProfile[]          @relation("EmployeeProfileManagerUser")
+  warehousePermission       WarehousePermission?       @relation("WarehousePermissionOwner")
+  inventoryMovements        InventoryMovement[]         @relation("InventoryMovementActor")
+  inventoryCustodiesCreated InventoryCustody[]          @relation("InventoryCustodyCreator")
+  inventoryCustodyEvents    InventoryCustodyEvent[]     @relation("InventoryCustodyEventActor")
+  warehouseCountsCreated    WarehouseCount[]             @relation("WarehouseCountCreator")
+  warehouseCountsCompleted  WarehouseCount[]             @relation("WarehouseCountCounter")
+  discrepancyInvestigations WarehouseDiscrepancy[] @relation("WarehouseDiscrepancyInvestigator")
+  warehouseRecountsRequested WarehouseDiscrepancyRecount[] @relation("WarehouseRecountRequester")
+  warehouseRecountsCompleted WarehouseDiscrepancyRecount[] @relation("WarehouseRecountCounter")
 }
 
 model UserRole {
@@ -79,30 +91,32 @@ model WorkShift {
 }
 
 model Employee {
-  id              String                 @id @default(cuid())
-  employeeNumber  String                 @unique
-  fullName        String
-  departmentId    String
-  status          EmployeeStatus         @default(ACTIVE)
-  pinHash         String
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @updatedAt
-  position        String?
-  workShiftId     String?
-  pinMustChange   Boolean                @default(true)
-  pinUpdatedAt    DateTime?
-  corporateUserId String?                @unique
-  consumptions    Consumption[]
-  corporateUser   User?                  @relation("CorporateUserEmployee", fields: [corporateUserId], references: [id])
-  department      Department             @relation(fields: [departmentId], references: [id])
-  workShift       WorkShift?             @relation(fields: [workShiftId], references: [id])
-  movements       EmployeeMovement[]
-  profile         EmployeeProfile?       @relation("EmployeeProfileOwner")
-  managedProfiles EmployeeProfile[]      @relation("EmployeeProfileManager")
-  timeMovements   EmployeeTimeMovement[]
-  accessSessions  FoodAccessSession[]
-  foodOrders      FoodOrder[]
-  reservations    Reservation[]
+  id               String                 @id @default(cuid())
+  employeeNumber   String                 @unique
+  fullName         String
+  departmentId     String
+  status           EmployeeStatus         @default(ACTIVE)
+  pinHash          String
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  position         String?
+  workShiftId      String?
+  pinMustChange    Boolean                @default(true)
+  pinUpdatedAt     DateTime?
+  corporateUserId  String?                @unique
+  consumptions     Consumption[]
+  corporateUser    User?                  @relation("CorporateUserEmployee", fields: [corporateUserId], references: [id])
+  department       Department             @relation(fields: [departmentId], references: [id])
+  workShift        WorkShift?             @relation(fields: [workShiftId], references: [id])
+  movements        EmployeeMovement[]
+  profile          EmployeeProfile?       @relation("EmployeeProfileOwner")
+  managedProfiles  EmployeeProfile[]      @relation("EmployeeProfileManager")
+  timeMovements    EmployeeTimeMovement[]
+  accessSessions   FoodAccessSession[]
+  foodOrders       FoodOrder[]
+  reservations     Reservation[]
+  hrRequests       HrRequest[]
+  vacationBalances VacationBalance[]
 
   @@index([departmentId, status])
   @@index([workShiftId, status])
@@ -123,12 +137,15 @@ model EmployeeProfile {
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
   managerId         String?
+  managerUserId     String?
   employee          Employee      @relation("EmployeeProfileOwner", fields: [employeeId], references: [id], onDelete: Cascade)
   manager           Employee?     @relation("EmployeeProfileManager", fields: [managerId], references: [id])
+  managerUser       User?         @relation("EmployeeProfileManagerUser", fields: [managerUserId], references: [id])
 
   @@index([hireDate])
   @@index([contractType])
   @@index([managerId])
+  @@index([managerUserId])
 }
 
 model EmployeeMovement {
@@ -154,6 +171,12 @@ model EmployeeMovement {
   newWorkShiftId         String?
   newWorkShiftCode       String?
   newWorkShiftName       String?
+  previousManagerId      String?
+  previousManagerName    String?
+  previousManagerUserId  String?
+  newManagerId           String?
+  newManagerName         String?
+  newManagerUserId       String?
   registeredById         String?
   createdAt              DateTime             @default(now())
   employee               Employee             @relation(fields: [employeeId], references: [id])
@@ -178,8 +201,11 @@ model EmployeeTimeMovement {
   updatedAt      DateTime                 @updatedAt
   employee       Employee                 @relation(fields: [employeeId], references: [id])
   registeredBy   User?                    @relation("EmployeeTimeMovementRegisteredBy", fields: [registeredById], references: [id])
+  hrRequestId    String?
+  hrRequest      HrRequest?               @relation(fields: [hrRequestId], references: [id], onDelete: SetNull)
 
   @@index([employeeId, effectiveDate])
+  @@index([hrRequestId])
   @@index([employeeId, type])
   @@index([type, effectiveDate])
   @@index([reason, effectiveDate])
@@ -321,52 +347,145 @@ model FoodAccessSession {
   @@index([employeeId, expiresAt])
 }
 
+// Solicitudes e incidencias de Recursos Humanos.
+// La solicitud conserva el workflow; EmployeeTimeMovement registra la consecuencia administrativa.
+model HrRequest {
+  id               String                 @id @default(cuid())
+  folio            String                 @unique
+  employeeId       String
+  type             HrRequestType
+  status           HrRequestStatus        @default(DRAFT)
+  approvalRoute    HrApprovalRoute
+  startDate        DateTime               @db.Date
+  endDate          DateTime?              @db.Date
+  startTime        String?
+  endTime          String?
+  requestedDays    Decimal?               @db.Decimal(6, 2)
+  requestedMinutes Int?
+  reason           String
+  employeeComment  String?
+  submittedAt      DateTime?
+  resolvedAt       DateTime?
+  cancelledAt      DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  employee         Employee               @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  decisions        HrRequestDecision[]
+  events           HrRequestEvent[]
+  timeMovements    EmployeeTimeMovement[]
+  attachments      HrRequestAttachment[]
+
+  @@index([employeeId, createdAt])
+  @@index([status, createdAt])
+  @@index([type, startDate])
+  @@index([approvalRoute, status])
+}
+
+model HrRequestDecision {
+  id        String          @id @default(cuid())
+  requestId String
+  actorId   String
+  stage     HrApprovalStage
+  decision  HrDecisionType
+  comment   String?
+  createdAt DateTime        @default(now())
+  request   HrRequest       @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  actor     User            @relation("HrRequestDecisionActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([requestId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([stage, decision])
+}
+
+model HrRequestEvent {
+  id        String             @id @default(cuid())
+  requestId String
+  actorId   String
+  eventType HrRequestEventType
+  details   Json?
+  createdAt DateTime           @default(now())
+  request   HrRequest          @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  actor     User               @relation("HrRequestEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([requestId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+model HrRequestAttachment {
+  id           String    @id @default(cuid())
+  requestId    String
+  originalName String
+  storageKey   String    @unique
+  mimeType     String
+  sizeBytes    Int
+  checksum     String
+  createdAt    DateTime  @default(now())
+  request      HrRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+
+  @@index([requestId, createdAt])
+}
+
+model VacationBalance {
+  id              String   @id @default(cuid())
+  employeeId      String
+  periodStart     DateTime @db.Date
+  periodEnd       DateTime @db.Date
+  entitledDays    Decimal  @db.Decimal(6, 2)
+  carriedOverDays Decimal  @default(0) @db.Decimal(6, 2)
+  adjustmentDays  Decimal  @default(0) @db.Decimal(6, 2)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  employee        Employee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  @@unique([employeeId, periodStart])
+  @@index([employeeId, periodEnd])
+}
 
 // Seguimiento de Compras: permisos independientes de los roles corporativos.
 model PurchasePermission {
-  userId           String   @id
-  canRequest       Boolean  @default(false)
-  canRequestUrgent Boolean  @default(false)
-  canAuthorize     Boolean  @default(false)
-  canViewAll       Boolean  @default(false)
-  canManagePurchases Boolean @default(false)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  user             User     @relation("PurchasePermissionOwner", fields: [userId], references: [id], onDelete: Restrict)
+  userId             String   @id
+  canRequest         Boolean  @default(false)
+  canRequestUrgent   Boolean  @default(false)
+  canAuthorize       Boolean  @default(false)
+  canViewAll         Boolean  @default(false)
+  canManagePurchases Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  user               User     @relation("PurchasePermissionOwner", fields: [userId], references: [id], onDelete: Restrict)
 }
 
 // Los estados de autorizacion y documentacion son independientes.
 model PurchaseRequest {
-  id                   String                      @id @default(cuid())
-  folio                String                      @unique
-  requesterId          String
-  requesterDepartment  String?
-  description          String
-  quantity             Decimal                     @db.Decimal(12, 3)
-  unit                 String
-  justification        String
-  requiredDate         DateTime?                   @db.Date
-  isUrgent             Boolean                     @default(false)
-  urgencyReason        String?
-  authorizationStatus  PurchaseAuthorizationStatus @default(PENDING)
-  documentStatus       PurchaseDocumentStatus      @default(PENDING)
-  purchasedAt          DateTime?
-  purchaseRecordedAt   DateTime?
-  completedAt          DateTime?
-  createdAt            DateTime                    @default(now())
-  updatedAt            DateTime                    @updatedAt
-  requester            User                        @relation("PurchaseRequester", fields: [requesterId], references: [id], onDelete: Restrict)
-  decisions            PurchaseDecision[]
-  documents            PurchaseDocument[]
-  events               PurchaseEvent[]
-  items                PurchaseRequestItem[]
+  id                  String                      @id @default(cuid())
+  folio               String                      @unique
+  requesterId         String
+  requesterDepartment String?
+  description         String
+  quantity            Decimal                     @db.Decimal(12, 3)
+  unit                String
+  justification       String
+  requiredDate        DateTime?                   @db.Date
+  isUrgent            Boolean                     @default(false)
+  urgencyReason       String?
+  authorizationStatus PurchaseAuthorizationStatus @default(PENDING)
+  documentStatus      PurchaseDocumentStatus      @default(PENDING)
+  purchasedAt         DateTime?
+  purchaseRecordedAt  DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+  requester           User                        @relation("PurchaseRequester", fields: [requesterId], references: [id], onDelete: Restrict)
+  decisions           PurchaseDecision[]
+  documents           PurchaseDocument[]
+  events              PurchaseEvent[]
+  items               PurchaseRequestItem[]
 
   @@index([requesterId, createdAt])
   @@index([authorizationStatus, createdAt])
   @@index([documentStatus, createdAt])
   @@index([isUrgent, authorizationStatus])
 }
-
 
 model PurchaseRequestItem {
   id          String          @id @default(cuid())
@@ -396,23 +515,23 @@ model PurchaseDecision {
 }
 
 model PurchaseDocument {
-  id           String               @id @default(cuid())
-  requestId    String
-  type         PurchaseDocumentType
-  originalName String
-  storageKey   String               @unique
-  mimeType     String
-  sizeBytes    Int
-  checksum     String
-  uploadedById String
-  supersededAt DateTime?
-  supersededById String?
+  id                String               @id @default(cuid())
+  requestId         String
+  type              PurchaseDocumentType
+  originalName      String
+  storageKey        String               @unique
+  mimeType          String
+  sizeBytes         Int
+  checksum          String
+  uploadedById      String
+  supersededAt      DateTime?
+  supersededById    String?
   replacementReason String?
-  createdAt    DateTime             @default(now())
-  request      PurchaseRequest      @relation(fields: [requestId], references: [id], onDelete: Restrict)
-  uploadedBy   User                 @relation("PurchaseDocumentUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
-  supersededBy PurchaseDocument?    @relation("PurchaseDocumentVersions", fields: [supersededById], references: [id], onDelete: Restrict)
-  previousVersions PurchaseDocument[] @relation("PurchaseDocumentVersions")
+  createdAt         DateTime             @default(now())
+  request           PurchaseRequest      @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  uploadedBy        User                 @relation("PurchaseDocumentUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  supersededBy      PurchaseDocument?    @relation("PurchaseDocumentVersions", fields: [supersededById], references: [id], onDelete: Restrict)
+  previousVersions  PurchaseDocument[]   @relation("PurchaseDocumentVersions")
 
   @@index([requestId, type, createdAt])
   @@index([uploadedById, createdAt])
@@ -430,6 +549,292 @@ model PurchaseEvent {
 
   @@index([requestId, createdAt])
   @@index([actorId, createdAt])
+}
+
+// Almacen Fase 1: catalogo, ubicaciones y libro mayor de movimientos.
+// La existencia se deriva de InventoryMovement; no existe un saldo editable como fuente de verdad.
+model WarehousePermission {
+  userId              String   @id
+  canViewInventory    Boolean  @default(false)
+  canRegisterMovement Boolean  @default(false)
+  canImportInitial    Boolean  @default(false)
+  canManageCatalog    Boolean  @default(false)
+  canManageWarehouse  Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  user                User     @relation("WarehousePermissionOwner", fields: [userId], references: [id], onDelete: Restrict)
+}
+
+model InventoryItem {
+  id          String              @id @default(cuid())
+  code        String              @unique
+  description String
+  baseUnit    String
+  active      Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  movements   InventoryMovement[]
+  warehouseCounts      WarehouseCount[]
+  custodies   InventoryCustody[]
+
+  @@index([active, code])
+}
+
+model Warehouse {
+  id        String              @id @default(cuid())
+  code      String              @unique
+  name      String
+  active    Boolean             @default(true)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  locations WarehouseLocation[]
+
+  @@index([active, name])
+}
+
+model WarehouseLocation {
+  id                   String              @id @default(cuid())
+  warehouseId          String
+  code                 String
+  name                 String
+  active               Boolean             @default(true)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  warehouse            Warehouse           @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  originMovements      InventoryMovement[] @relation("InventoryMovementOrigin")
+  destinationMovements InventoryMovement[] @relation("InventoryMovementDestination")
+  warehouseCounts      WarehouseCount[]
+  custodies            InventoryCustody[]
+
+  @@unique([warehouseId, code])
+  @@index([warehouseId, active])
+}
+
+model InventoryMovement {
+  id                    String                @id @default(cuid())
+  folio                 String                @unique
+  itemId                String
+  type                  InventoryMovementType
+  quantity              Decimal               @db.Decimal(18, 3)
+  unit                  String
+  originLocationId      String?
+  destinationLocationId String?
+  referenceType         String?
+  referenceNumber       String?
+  notes                 String?
+  occurredAt            DateTime
+  actorId               String
+  createdAt             DateTime              @default(now())
+  item                  InventoryItem         @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  originLocation        WarehouseLocation?    @relation("InventoryMovementOrigin", fields: [originLocationId], references: [id], onDelete: Restrict)
+  destinationLocation   WarehouseLocation?    @relation("InventoryMovementDestination", fields: [destinationLocationId], references: [id], onDelete: Restrict)
+  actor                 User                  @relation("InventoryMovementActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([itemId, occurredAt])
+  @@index([originLocationId, occurredAt])
+  @@index([destinationLocationId, occurredAt])
+  @@index([type, occurredAt])
+  @@index([actorId, occurredAt])
+  @@index([referenceType, referenceNumber])
+}
+
+// Almacen Fase 2: custodia operativa independiente de la ubicacion fisica.
+// InventoryMovement conserva la verdad fisica; InventoryCustody conserva responsabilidad, estado y tiempo.
+model OperationalArea {
+  id                  String                  @id @default(cuid())
+  code                String                  @unique
+  name                String
+  active              Boolean                 @default(true)
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  currentCustodies    InventoryCustody[]      @relation("InventoryCustodyCurrentArea")
+  nextActionCustodies InventoryCustody[]      @relation("InventoryCustodyNextActionArea")
+  eventsFrom          InventoryCustodyEvent[] @relation("InventoryCustodyEventFromArea")
+  eventsTo            InventoryCustodyEvent[] @relation("InventoryCustodyEventToArea")
+
+  @@index([active, name])
+}
+
+model InventoryCustody {
+  id                String                 @id @default(cuid())
+  folio             String                 @unique
+  itemId            String
+  quantity          Decimal                @db.Decimal(18, 3)
+  unit              String
+  locationId        String?
+  custodianAreaId   String
+  nextActionAreaId  String?
+  status            InventoryCustodyStatus
+  reason            String?
+  referenceType     String?
+  referenceNumber   String?
+  notes             String?
+  enteredAt         DateTime
+  closedAt          DateTime?
+  createdById       String
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+  item              InventoryItem          @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  location          WarehouseLocation?     @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  custodianArea     OperationalArea        @relation("InventoryCustodyCurrentArea", fields: [custodianAreaId], references: [id], onDelete: Restrict)
+  nextActionArea    OperationalArea?       @relation("InventoryCustodyNextActionArea", fields: [nextActionAreaId], references: [id], onDelete: Restrict)
+  createdBy         User                   @relation("InventoryCustodyCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  events            InventoryCustodyEvent[]
+
+  @@index([itemId, status])
+  @@index([locationId, status])
+  @@index([custodianAreaId, status, enteredAt])
+  @@index([nextActionAreaId, status, enteredAt])
+  @@index([referenceType, referenceNumber])
+}
+
+model InventoryCustodyEvent {
+  id              String                  @id @default(cuid())
+  custodyId       String
+  type            InventoryCustodyEventType
+  fromAreaId      String?
+  toAreaId        String?
+  fromStatus      InventoryCustodyStatus?
+  toStatus        InventoryCustodyStatus?
+  quantity        Decimal?                @db.Decimal(18, 3)
+  reason          String?
+  notes           String?
+  occurredAt      DateTime
+  actorId         String
+  createdAt       DateTime                @default(now())
+  custody         InventoryCustody        @relation(fields: [custodyId], references: [id], onDelete: Restrict)
+  fromArea        OperationalArea?        @relation("InventoryCustodyEventFromArea", fields: [fromAreaId], references: [id], onDelete: Restrict)
+  toArea          OperationalArea?        @relation("InventoryCustodyEventToArea", fields: [toAreaId], references: [id], onDelete: Restrict)
+  actor           User                    @relation("InventoryCustodyEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([custodyId, occurredAt])
+  @@index([fromAreaId, occurredAt])
+  @@index([toAreaId, occurredAt])
+  @@index([actorId, occurredAt])
+  @@index([type, occurredAt])
+}
+
+model WarehouseCount {
+  id               String               @id @default(cuid())
+  folio            String               @unique
+  itemId           String
+  locationId       String
+  type             WarehouseCountType
+  status           WarehouseCountStatus @default(OPEN)
+  expectedQuantity Decimal              @db.Decimal(18, 3)
+  countedQuantity  Decimal?             @db.Decimal(18, 3)
+  difference       Decimal?             @db.Decimal(18, 3)
+  notes            String?
+  launchedAt       DateTime
+  countedAt        DateTime?
+  createdById      String
+  countedById      String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  item             InventoryItem        @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  location         WarehouseLocation    @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  createdBy        User                 @relation("WarehouseCountCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  countedBy        User?                @relation("WarehouseCountCounter", fields: [countedById], references: [id], onDelete: Restrict)
+  discrepancy      WarehouseDiscrepancy?
+
+  @@index([status, launchedAt])
+  @@index([itemId, locationId, launchedAt])
+}
+
+model WarehouseDiscrepancy {
+  id             String @id @default(cuid())
+  folio          String @unique
+  countId        String @unique
+  classification String @default("UNCLASSIFIED")
+  status         String @default("OPEN")
+  cause          String?
+  notes          String?
+  resolution     String?
+  assignedToId   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  closedAt       DateTime?
+  recounts       WarehouseDiscrepancyRecount[]
+  count          WarehouseCount @relation(fields: [countId], references: [id], onDelete: Restrict)
+  assignedTo     User? @relation("WarehouseDiscrepancyInvestigator", fields: [assignedToId], references: [id], onDelete: Restrict)
+  @@index([status, createdAt])
+}
+
+model WarehouseDiscrepancyRecount {
+  id String @id @default(cuid())
+  folio String @unique
+  discrepancyId String
+  status String @default("OPEN")
+  expectedQuantity Decimal @db.Decimal(18,3)
+  countedQuantity Decimal? @db.Decimal(18,3)
+  difference Decimal? @db.Decimal(18,3)
+  reason String
+  notes String?
+  requestedById String
+  completedById String?
+  requestedAt DateTime @default(now())
+  completedAt DateTime?
+  discrepancy WarehouseDiscrepancy @relation(fields: [discrepancyId], references: [id], onDelete: Restrict)
+  requestedBy User @relation("WarehouseRecountRequester", fields: [requestedById], references: [id], onDelete: Restrict)
+  completedBy User? @relation("WarehouseRecountCounter", fields: [completedById], references: [id], onDelete: Restrict)
+  @@index([discrepancyId, requestedAt])
+}
+
+enum WarehouseCountType {
+  CYCLE
+  SURPRISE
+}
+
+enum WarehouseCountStatus {
+  OPEN
+  COMPLETED
+  CANCELLED
+}
+
+enum InventoryCustodyStatus {
+  AVAILABLE
+  REQUESTED
+  IN_TRANSIT
+  IN_INSPECTION
+  HELD
+  RELEASED
+  REWORK
+  NONCONFORMING_PRODUCT
+  CONCESSION_DEVIATION
+  CONSUMED_IN_TEST
+  RETURN_IN_TRANSIT
+  CLOSED
+}
+
+enum InventoryCustodyEventType {
+  CREATED
+  REQUESTED
+  TRANSFERRED
+  RECEIVED
+  INSPECTION_STARTED
+  HELD
+  RELEASED
+  SENT_TO_REWORK
+  REWORK_COMPLETED
+  CLASSIFIED_NONCONFORMING
+  CONCESSION_DEVIATION_GRANTED
+  CONSUMED_IN_TEST
+  CONSUMED
+  RETURN_REQUESTED
+  RETURNED
+  NEXT_ACTION_ASSIGNED
+  CLOSED
+}
+
+enum InventoryMovementType {
+  INITIAL_BALANCE
+  EXTERNAL_RECEIPT
+  EXTERNAL_ISSUE
+  INTERNAL_TRANSFER
+  OPERATIONAL_HANDOFF
+  OPERATIONAL_RETURN
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
 }
 
 enum PurchaseAuthorizationStatus {
@@ -472,6 +877,56 @@ enum PurchaseEventType {
   DOCUMENT_COMPLETED
 }
 
+enum HrRequestType {
+  VACATION
+  ABSENCE_PERMISSION
+  EARLY_DEPARTURE
+  LATE_ARRIVAL
+  HOURLY_PERMISSION
+  ABSENCE_JUSTIFICATION
+  LATE_JUSTIFICATION
+  MEDICAL_LEAVE
+}
+
+enum HrRequestStatus {
+  DRAFT
+  PENDING_MANAGER
+  PENDING_HR
+  INFORMATION_REQUIRED
+  AUTHORIZED
+  REJECTED
+  CANCELLED
+}
+
+enum HrApprovalRoute {
+  MANAGER_THEN_HR
+  HR_DIRECT
+}
+
+enum HrApprovalStage {
+  MANAGER
+  HR
+}
+
+enum HrDecisionType {
+  APPROVE
+  REJECT
+  REQUEST_INFORMATION
+}
+
+enum HrRequestEventType {
+  CREATED
+  SUBMITTED
+  UPDATED
+  INFORMATION_PROVIDED
+  DECISION_RECORDED
+  AUTHORIZED
+  REJECTED
+  CANCELLED
+  TIME_MOVEMENT_CREATED
+  DOCUMENT_UPLOADED
+}
+
 enum CorporateRole {
   ADMIN
   DIRECCION
@@ -504,6 +959,7 @@ enum EmployeeMovementType {
   PROMOTION
   TERMINATION
   REHIRE
+  MANAGER_CHANGE
 }
 
 enum EmployeeTimeMovementType {
