@@ -1,11 +1,20 @@
 import { randomUUID } from "crypto";
 import { NextRequest,NextResponse } from "next/server";
 import { WarehouseCountType } from "@prisma/client";
-import { requireCorporateUser } from "@/lib/auth/corporate-auth";
-import { getInventoryBalances } from "@/repositories/warehouse.repository";
+import { apiError } from "@/lib/api-response";
+import { CorporateAuthenticationRequired, CorporateAuthorizationRequired, requireCorporateUser } from "@/lib/auth/corporate-auth";
+import { getInventoryBalances, getWarehousePermission } from "@/repositories/warehouse.repository";
 import { createWarehouseCount,listWarehouseCounts,WarehouseCountError } from "@/repositories/warehouse-counts.repository";
 
 const folio=()=>`CNT-${new Date().toISOString().slice(0,10).replaceAll("-","")}-${randomUUID().replaceAll("-","").slice(0,10).toUpperCase()}`;
+
+async function requireCountOperationAccess() {
+ const user=await requireCorporateUser();
+ if(user.roles.includes("ADMIN"))return user;
+ const permission=await getWarehousePermission(user.id);
+ if(permission?.canRegisterMovement)return user;
+ throw new CorporateAuthorizationRequired("No tienes permiso para registrar conteos de Almacén.");
+}
 
 export async function GET(){
  try{
@@ -19,9 +28,9 @@ export async function GET(){
 }
 export async function POST(req:NextRequest){
  try{
-  const user=await requireCorporateUser(); const b=await req.json();
+  const user=await requireCountOperationAccess(); const b=await req.json();
   if(!b.itemId||!b.locationId)return NextResponse.json({error:"Artículo y ubicación son obligatorios."},{status:400});
   const c=await createWarehouseCount({folio:folio(),itemId:b.itemId,locationId:b.locationId,type:b.type==="SURPRISE"?WarehouseCountType.SURPRISE:WarehouseCountType.CYCLE,notes:b.notes,actorId:user.id});
   return NextResponse.json({id:c.id,folio:c.folio},{status:201});
- }catch(e){return NextResponse.json({error:e instanceof Error?e.message:"No fue posible iniciar."},{status:e instanceof WarehouseCountError?400:500});}
+ }catch(e){if(e instanceof CorporateAuthenticationRequired||e instanceof CorporateAuthorizationRequired)return apiError(e);return NextResponse.json({error:e instanceof Error?e.message:"No fue posible iniciar."},{status:e instanceof WarehouseCountError?400:500});}
 }
