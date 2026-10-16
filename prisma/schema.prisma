@@ -39,6 +39,7 @@ model User {
   inventoryMovements        InventoryMovement[]         @relation("InventoryMovementActor")
   inventoryCustodiesCreated InventoryCustody[]          @relation("InventoryCustodyCreator")
   inventoryCustodyEvents    InventoryCustodyEvent[]     @relation("InventoryCustodyEventActor")
+  inventoryCustodyOperations InventoryCustodyOperation[] @relation("InventoryCustodyOperationActor")
   warehouseCountsCreated    WarehouseCount[]             @relation("WarehouseCountCreator")
   warehouseCountsCompleted  WarehouseCount[]             @relation("WarehouseCountCounter")
   discrepancyInvestigations WarehouseDiscrepancy[] @relation("WarehouseDiscrepancyInvestigator")
@@ -680,6 +681,7 @@ model InventoryCustody {
   nextActionArea    OperationalArea?       @relation("InventoryCustodyNextActionArea", fields: [nextActionAreaId], references: [id], onDelete: Restrict)
   createdBy         User                   @relation("InventoryCustodyCreator", fields: [createdById], references: [id], onDelete: Restrict)
   events            InventoryCustodyEvent[]
+  operations        InventoryCustodyOperation[]
 
   @@index([itemId, status])
   @@index([locationId, status])
@@ -712,6 +714,25 @@ model InventoryCustodyEvent {
   @@index([toAreaId, occurredAt])
   @@index([actorId, occurredAt])
   @@index([type, occurredAt])
+}
+
+model InventoryCustodyOperation {
+  id                   String                            @id @default(cuid())
+  operationKey         String                            @unique
+  operationPayloadHash String                            @db.VarChar(128)
+  custodyId            String
+  kind                 InventoryCustodyOperationKind
+  actorId              String
+  requestBody          Json?
+  responseBody         Json?
+  createdAt            DateTime                          @default(now())
+  processedAt          DateTime?
+  custody              InventoryCustody                 @relation(fields: [custodyId], references: [id], onDelete: Restrict)
+  actor                User                              @relation("InventoryCustodyOperationActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([custodyId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([kind, createdAt])
 }
 
 model WarehouseCount {
@@ -824,6 +845,10 @@ enum InventoryCustodyEventType {
   RETURNED
   NEXT_ACTION_ASSIGNED
   CLOSED
+}
+
+enum InventoryCustodyOperationKind {
+  CONSUME_PRODUCTION_CUSTODY
 }
 
 enum InventoryMovementType {

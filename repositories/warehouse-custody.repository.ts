@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db";
+import { isSerializationConflict, isUniqueConflict, payloadHash } from "@/lib/warehouse-idempotency";
 
 export type CreateOperationalHandoffData = {
   movementFolio: string;
@@ -346,84 +347,156 @@ export async function consumeProductionCustody(data: {
   notes?: string | null;
   actorId: string;
   occurredAt: Date;
+  operationKey: string;
+  operationPayloadHash: string;
 }) {
-  return db.$transaction(async (tx) => {
-    const custody = await tx.inventoryCustody.findUnique({
-      where: { id: data.custodyId },
-      include: { item: true, custodianArea: true, nextActionArea: true },
+  const normalizedReference = data.referenceNumber.trim();
+  const normalizedNotes = data.notes?.trim() || null;
+  const requestHash = payloadHash({
+    kind: "CONSUME_PRODUCTION_CUSTODY",
+    actorId: data.actorId,
+    custodyId: data.custodyId,
+    payload: {
+      quantity: data.quantity,
+      referenceNumber: normalizedReference,
+      notes: normalizedNotes,
+    },
+  });
+  if (data.operationPayloadHash !== requestHash) {
+    throw new InvalidProductionCustodyOperationError("La clave de idempotencia ya fue usada con un payload distinto.");
+  }
+
+  const readCompletedOperation = async () => {
+    const previous = await db.inventoryCustodyOperation.findUnique({
+      where: { operationKey: data.operationKey },
+      select: { operationPayloadHash: true, responseBody: true },
     });
+    if (!previous) return null;
+    if (previous.operationPayloadHash !== requestHash) {
+      throw new InvalidProductionCustodyOperationError("La clave de idempotencia ya fue usada con un payload distinto.");
+    }
+    return (previous.responseBody as Record<string, unknown>) ?? { duplicate: true, idempotent: true };
+  };
 
-    if (!custody || custody.closedAt || custody.status !== "AVAILABLE") {
-      throw new InvalidProductionCustodyOperationError("La custodia ya no está disponible para consumo.");
-    }
-    if (custody.custodianArea.code !== "PRODUCCION") {
-      throw new InvalidProductionCustodyOperationError("La custodia no corresponde a Producción.");
-    }
-    if (!Number.isFinite(data.quantity) || data.quantity <= 0) {
-      throw new InvalidProductionCustodyOperationError("La cantidad consumida debe ser mayor que cero.");
-    }
-    if (!data.referenceNumber.trim()) {
-      throw new InvalidProductionCustodyOperationError("La orden o referencia de producción es obligatoria.");
-    }
+  const previous = await readCompletedOperation();
+  if (previous) return previous;
 
-    const available = custody.quantity.toNumber();
-    if (data.quantity > available) {
-      throw new InvalidProductionCustodyOperationError(
-        `No puedes consumir ${data.quantity} ${custody.unit}. La custodia disponible es ${available} ${custody.unit}.`,
-      );
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await db.$transaction(async (tx) => {
+        const custody = await tx.inventoryCustody.findUnique({
+          where: { id: data.custodyId },
+          include: { item: true, custodianArea: true, nextActionArea: true },
+        });
+
+        if (!custody || custody.closedAt || custody.status !== "AVAILABLE") {
+          throw new InvalidProductionCustodyOperationError("La custodia ya no está disponible para consumo.");
+        }
+        if (custody.custodianArea.code !== "PRODUCCION") {
+          throw new InvalidProductionCustodyOperationError("La custodia no corresponde a Producción.");
+        }
+        if (!Number.isFinite(data.quantity) || data.quantity <= 0 || !Number.isInteger(data.quantity * 1000)) {
+          throw new InvalidProductionCustodyOperationError("La cantidad consumida debe ser mayor que cero y tener máximo tres decimales.");
+        }
+        if (!normalizedReference) {
+          throw new InvalidProductionCustodyOperationError("La orden o referencia de producción es obligatoria.");
+        }
+
+        const available = custody.quantity.toNumber();
+        if (data.quantity > available) {
+          throw new InvalidProductionCustodyOperationError(
+            `No puedes consumir ${data.quantity} ${custody.unit}. La custodia disponible es ${available} ${custody.unit}.`,
+          );
+        }
+
+        const remaining = available - data.quantity;
+        const updated = await tx.inventoryCustody.updateMany({
+          where: { id: custody.id, status: "AVAILABLE", closedAt: null, quantity: custody.quantity },
+          data: {
+            quantity: new Prisma.Decimal(remaining),
+            status: remaining === 0 ? "CLOSED" : "AVAILABLE",
+            closedAt: remaining === 0 ? data.occurredAt : null,
+            referenceType: "ORDEN_PRODUCCION",
+            referenceNumber: normalizedReference,
+            enteredAt: data.occurredAt,
+          },
+        });
+        if (updated.count !== 1) {
+          throw new InvalidProductionCustodyOperationError("La custodia cambió durante el consumo. Actualiza e inténtalo nuevamente.");
+        }
+
+        await tx.inventoryCustodyEvent.create({
+          data: {
+            custodyId: custody.id,
+            type: "CONSUMED",
+            fromAreaId: custody.custodianAreaId,
+            toAreaId: custody.custodianAreaId,
+            fromStatus: "AVAILABLE",
+            toStatus: remaining === 0 ? "CLOSED" : "AVAILABLE",
+            quantity: new Prisma.Decimal(data.quantity),
+            reason: `Consumo de material en Producción · ${normalizedReference}`,
+            notes: normalizedNotes,
+            occurredAt: data.occurredAt,
+            actorId: data.actorId,
+          },
+        });
+
+        if (remaining === 0) {
+          await tx.inventoryCustodyEvent.create({
+            data: {
+              custodyId: custody.id,
+              type: "CLOSED",
+              fromAreaId: custody.custodianAreaId,
+              toAreaId: custody.custodianAreaId,
+              fromStatus: "AVAILABLE",
+              toStatus: "CLOSED",
+              quantity: new Prisma.Decimal(0),
+              reason: "Custodia cerrada por consumo total",
+              occurredAt: data.occurredAt,
+              actorId: data.actorId,
+            },
+          });
+        }
+
+        const response = JSON.parse(JSON.stringify({
+          consumed: data.quantity,
+          remaining,
+          unit: custody.unit,
+          folio: custody.folio,
+          item: custody.item,
+          duplicate: false,
+          idempotent: false,
+        })) as Prisma.InputJsonObject;
+
+        await tx.inventoryCustodyOperation.create({
+          data: {
+            operationKey: data.operationKey,
+            operationPayloadHash: requestHash,
+            custodyId: data.custodyId,
+            kind: "CONSUME_PRODUCTION_CUSTODY",
+            actorId: data.actorId,
+            requestBody: {
+              custodyId: data.custodyId,
+              quantity: data.quantity,
+              referenceNumber: normalizedReference,
+              notes: normalizedNotes,
+            },
+            responseBody: response,
+            processedAt: data.occurredAt,
+          },
+        });
+
+        return response;
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (error) {
+      if (isUniqueConflict(error) || isSerializationConflict(error)) {
+        const completed = await readCompletedOperation();
+        if (completed) return completed;
+        if (isSerializationConflict(error) && attempt < 2) continue;
+      }
+      throw error;
     }
-
-    const remaining = available - data.quantity;
-    const updated = await tx.inventoryCustody.updateMany({
-      where: { id: custody.id, status: "AVAILABLE", closedAt: null, quantity: custody.quantity },
-      data: {
-        quantity: new Prisma.Decimal(remaining),
-        status: remaining === 0 ? "CLOSED" : "AVAILABLE",
-        closedAt: remaining === 0 ? data.occurredAt : null,
-        referenceType: "ORDEN_PRODUCCION",
-        referenceNumber: data.referenceNumber.trim(),
-        enteredAt: data.occurredAt,
-      },
-    });
-    if (updated.count !== 1) {
-      throw new InvalidProductionCustodyOperationError("La custodia cambió durante el consumo. Actualiza e inténtalo nuevamente.");
-    }
-
-    await tx.inventoryCustodyEvent.create({
-      data: {
-        custodyId: custody.id,
-        type: "CONSUMED",
-        fromAreaId: custody.custodianAreaId,
-        toAreaId: custody.custodianAreaId,
-        fromStatus: "AVAILABLE",
-        toStatus: remaining === 0 ? "CLOSED" : "AVAILABLE",
-        quantity: new Prisma.Decimal(data.quantity),
-        reason: `Consumo de material en Producción · ${data.referenceNumber.trim()}`,
-        notes: data.notes?.trim() || null,
-        occurredAt: data.occurredAt,
-        actorId: data.actorId,
-      },
-    });
-
-    if (remaining === 0) {
-      await tx.inventoryCustodyEvent.create({
-        data: {
-          custodyId: custody.id,
-          type: "CLOSED",
-          fromAreaId: custody.custodianAreaId,
-          toAreaId: custody.custodianAreaId,
-          fromStatus: "AVAILABLE",
-          toStatus: "CLOSED",
-          quantity: new Prisma.Decimal(0),
-          reason: "Custodia cerrada por consumo total",
-          occurredAt: data.occurredAt,
-          actorId: data.actorId,
-        },
-      });
-    }
-
-    return { consumed: data.quantity, remaining, unit: custody.unit, folio: custody.folio, item: custody.item };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
 }
 
 export async function requestProductionReturn(data: {
