@@ -40,6 +40,7 @@ model User {
   inventoryCustodiesCreated InventoryCustody[]          @relation("InventoryCustodyCreator")
   inventoryCustodyEvents    InventoryCustodyEvent[]     @relation("InventoryCustodyEventActor")
   inventoryCustodyOperations InventoryCustodyOperation[] @relation("InventoryCustodyOperationActor")
+  warehouseStockOperations WarehouseStockOperation[]    @relation("WarehouseStockOperationActor")
   warehouseCountsCreated    WarehouseCount[]             @relation("WarehouseCountCreator")
   warehouseCountsCompleted  WarehouseCount[]             @relation("WarehouseCountCounter")
   discrepancyInvestigations WarehouseDiscrepancy[] @relation("WarehouseDiscrepancyInvestigator")
@@ -639,6 +640,22 @@ model InventoryMovement {
   @@index([referenceType, referenceNumber])
 }
 
+model WarehouseStockOperation {
+  id                   String                      @id @default(cuid())
+  operationKey         String                      @unique
+  operationPayloadHash String                      @db.VarChar(128)
+  kind                 WarehouseStockOperationKind
+  actorId              String
+  requestBody          Json?
+  responseBody         Json?
+  createdAt            DateTime                    @default(now())
+  processedAt          DateTime?
+  actor                User                        @relation("WarehouseStockOperationActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([actorId, createdAt])
+  @@index([kind, createdAt])
+}
+
 // Almacen Fase 2: custodia operativa independiente de la ubicacion fisica.
 // InventoryMovement conserva la verdad fisica; InventoryCustody conserva responsabilidad, estado y tiempo.
 model OperationalArea {
@@ -860,6 +877,10 @@ enum InventoryMovementType {
   OPERATIONAL_RETURN
   ADJUSTMENT_IN
   ADJUSTMENT_OUT
+}
+
+enum WarehouseStockOperationKind {
+  INTERNAL_TRANSFER
 }
 
 enum PurchaseAuthorizationStatus {

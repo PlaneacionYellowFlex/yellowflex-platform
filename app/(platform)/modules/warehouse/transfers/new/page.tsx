@@ -1,23 +1,47 @@
 "use client";
 import { ArrowLeft, ArrowRight, CheckCircle2, Loader2, MoveRight, Search } from "lucide-react";
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Item={id:string;code:string;description:string;baseUnit:string};
 type Location={id:string;code:string;name:string;warehouseName:string};
 type Catalog={items:Item[];locations:Location[]};
 type Created={folio:string;itemId:string;itemCode:string;quantity:number;unit:string;originLocation:{id:string;code:string}|null;destinationLocation:{id:string;code:string}|null};
 const norm=(v:string)=>v.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+const pendingTransferStorageKey="yellowflex:warehouse:pending-transfer-keys";
+
+function canonicalQuantity(value:string){
+ const match=/^(\d+)(?:\.(\d{0,3}))?$/.exec(value.trim());
+ if(!match)return value.trim();
+ const integer=match[1].replace(/^0+(?=\d)/,"");
+ const fraction=(match[2]??"").replace(/0+$/,"");
+ return fraction?`${integer}.${fraction}`:integer;
+}
+
+async function transferFingerprint(payload:Record<string,string|null>){
+ const bytes=new TextEncoder().encode(JSON.stringify(payload));
+ const digest=await crypto.subtle.digest("SHA-256",bytes);
+ return Array.from(new Uint8Array(digest),value=>value.toString(16).padStart(2,"0")).join("");
+}
+
+function readPendingTransferKeys():Record<string,string>{
+ try{const value=JSON.parse(sessionStorage.getItem(pendingTransferStorageKey)??"{}");return value&&typeof value==="object"&&!Array.isArray(value)?value as Record<string,string>:{}}catch{return {}}
+}
+
+function writePendingTransferKeys(value:Record<string,string>){
+ try{sessionStorage.setItem(pendingTransferStorageKey,JSON.stringify(value))}catch{}
+}
 
 export default function Page(){
  const [catalog,setCatalog]=useState<Catalog|null>(null),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false);
  const [error,setError]=useState(""),[created,setCreated]=useState<Created|null>(null),[query,setQuery]=useState(""),[itemId,setItemId]=useState("");
  const [quantity,setQuantity]=useState(""),[origin,setOrigin]=useState(""),[destination,setDestination]=useState("");
  const [referenceType,setReferenceType]=useState(""),[referenceNumber,setReferenceNumber]=useState(""),[notes,setNotes]=useState("");
+ const savingRef=useRef(false),pendingTransferKeysRef=useRef(new Map<string,string>());
  useEffect(()=>{fetch("/api/warehouse/movements/transfers",{cache:"no-store"}).then(async r=>{const b=await r.json();if(!r.ok)throw new Error(b.error);setCatalog(b)}).catch(e=>setError(e.message)).finally(()=>setLoading(false))},[]);
  const selected=catalog?.items.find(x=>x.id===itemId);
  const visible=useMemo(()=>{if(!catalog)return[];const q=norm(query);return catalog.items.filter(x=>!q||norm(`${x.code} ${x.description}`).includes(q)).slice(0,12)},[catalog,query]);
- async function submit(e:FormEvent){e.preventDefault();setSaving(true);setError("");try{const r=await fetch("/api/warehouse/movements/transfers",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({itemId,quantity,originLocationId:origin,destinationLocationId:destination,referenceType,referenceNumber,notes})});const b=await r.json();if(!r.ok)throw new Error(b.error);setCreated(b.movement)}catch(e){setError(e instanceof Error?e.message:"No fue posible registrar la transferencia.")}finally{setSaving(false)}}
+ async function submit(e:FormEvent){e.preventDefault();if(savingRef.current||created)return;savingRef.current=true;setSaving(true);setError("");let fingerprint="";try{const body={itemId,quantity,originLocationId:origin,destinationLocationId:destination,referenceType:referenceType.trim()||null,referenceNumber:referenceNumber.trim()||null,notes:notes.trim()||null};const fingerprintPayload={...body,quantity:canonicalQuantity(quantity)};fingerprint=await transferFingerprint(fingerprintPayload);const pending=pendingTransferKeysRef.current;const stored=readPendingTransferKeys();let key=pending.get(fingerprint)||stored[fingerprint];if(!key){key=crypto.randomUUID();stored[fingerprint]=key;writePendingTransferKeys(stored)}pending.set(fingerprint,key);const r=await fetch("/api/warehouse/movements/transfers",{method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":key},body:JSON.stringify(body)});const b=await r.json();if(!r.ok)throw new Error(b.error);pending.delete(fingerprint);delete stored[fingerprint];writePendingTransferKeys(stored);setCreated(b.movement)}catch(e){setError(e instanceof Error?e.message:"No fue posible registrar la transferencia.")}finally{savingRef.current=false;setSaving(false)}}
  if(loading)return <main className="flex min-h-[55vh] items-center justify-center text-slate-600"><Loader2 className="mr-2 h-5 w-5 animate-spin"/>Preparando transferencia…</main>;
  return <main className="mx-auto w-full max-w-6xl space-y-6 px-4 py-6 text-slate-800 sm:px-6 lg:px-8">
   <Link href="/modules/warehouse" className="inline-flex items-center gap-2 text-sm font-semibold text-blue-900"><ArrowLeft className="h-4 w-4"/>Volver a inventario</Link>

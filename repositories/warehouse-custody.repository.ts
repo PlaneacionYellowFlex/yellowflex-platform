@@ -2,12 +2,13 @@ import { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db";
 import { isSerializationConflict, isUniqueConflict, payloadHash } from "@/lib/warehouse-idempotency";
+import { getWarehouseStockBalance, lockWarehouseStock } from "@/repositories/warehouse-stock-lock";
 
 export type CreateOperationalHandoffData = {
   movementFolio: string;
   custodyFolio: string;
   itemId: string;
-  quantity: number;
+  quantity: Prisma.Decimal;
   unit: string;
   originLocationId: string;
   warehouseAreaId: string;
@@ -37,29 +38,11 @@ export async function createOperationalHandoff(
 ) {
   return db.$transaction(
     async (tx) => {
-      const [incoming, outgoing] = await Promise.all([
-        tx.inventoryMovement.aggregate({
-          where: {
-            itemId: data.itemId,
-            destinationLocationId: data.originLocationId,
-          },
-          _sum: { quantity: true },
-        }),
-        tx.inventoryMovement.aggregate({
-          where: {
-            itemId: data.itemId,
-            originLocationId: data.originLocationId,
-          },
-          _sum: { quantity: true },
-        }),
-      ]);
+      await lockWarehouseStock(tx, data.itemId, data.originLocationId);
+      const available = await getWarehouseStockBalance(tx, data.itemId, data.originLocationId);
 
-      const available =
-        (incoming._sum.quantity?.toNumber() ?? 0) -
-        (outgoing._sum.quantity?.toNumber() ?? 0);
-
-      if (available < data.quantity) {
-        throw new InsufficientWarehouseStockError(available, data.quantity);
+      if (available.lessThan(data.quantity)) {
+        throw new InsufficientWarehouseStockError(available.toNumber(), data.quantity.toNumber());
       }
 
       const movement = await tx.inventoryMovement.create({
@@ -67,7 +50,7 @@ export async function createOperationalHandoff(
           folio: data.movementFolio,
           itemId: data.itemId,
           type: "OPERATIONAL_HANDOFF",
-          quantity: new Prisma.Decimal(data.quantity),
+          quantity: data.quantity,
           unit: data.unit,
           originLocationId: data.originLocationId,
           destinationLocationId: null,
@@ -83,7 +66,7 @@ export async function createOperationalHandoff(
         data: {
           folio: data.custodyFolio,
           itemId: data.itemId,
-          quantity: new Prisma.Decimal(data.quantity),
+          quantity: data.quantity,
           unit: data.unit,
           locationId: null,
           custodianAreaId: data.productionAreaId,
@@ -103,7 +86,7 @@ export async function createOperationalHandoff(
                 toAreaId: data.productionAreaId,
                 fromStatus: "AVAILABLE",
                 toStatus: "IN_TRANSIT",
-                quantity: new Prisma.Decimal(data.quantity),
+                quantity: data.quantity,
                 reason: data.reason?.trim() || "Entrega operativa a Producción",
                 notes: data.notes?.trim() || null,
                 occurredAt: data.occurredAt,
@@ -115,7 +98,7 @@ export async function createOperationalHandoff(
                 toAreaId: data.productionAreaId,
                 fromStatus: "AVAILABLE",
                 toStatus: "IN_TRANSIT",
-                quantity: new Prisma.Decimal(data.quantity),
+                quantity: data.quantity,
                 reason: data.reason?.trim() || "Entrega operativa a Producción",
                 notes: data.notes?.trim() || null,
                 occurredAt: data.occurredAt,
@@ -134,10 +117,10 @@ export async function createOperationalHandoff(
         },
       });
 
-      return { movement, custody, availableBefore: available };
+      return { movement, custody, availableBefore: available.toNumber() };
     },
     {
-      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
     },
   );
 }

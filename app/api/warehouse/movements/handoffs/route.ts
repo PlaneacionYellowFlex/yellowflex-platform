@@ -7,6 +7,7 @@ import {
   CorporateAuthorizationRequired,
   requireCorporateUser,
 } from "@/lib/auth/corporate-auth";
+import { InvalidWarehouseQuantityError, parseWarehouseQuantity } from "@/lib/warehouse-quantity";
 import {
   createOperationalHandoff,
   InsufficientWarehouseStockError,
@@ -99,7 +100,15 @@ export async function POST(request: Request) {
       typeof body.originLocationId === "string"
         ? body.originLocationId.trim()
         : "";
-    const quantity = Number(body.quantity);
+    let quantity;
+    try {
+      quantity = parseWarehouseQuantity(body.quantity);
+    } catch (error) {
+      if (error instanceof InvalidWarehouseQuantityError) {
+        return NextResponse.json({ error: error.message }, { status: 400 });
+      }
+      throw error;
+    }
 
     if (!itemId || !originLocationId) {
       return NextResponse.json(
@@ -110,7 +119,7 @@ export async function POST(request: Request) {
 
     const validation = validateInventoryMovement({
       type: "OPERATIONAL_HANDOFF",
-      quantity,
+      quantity: quantity.toNumber(),
       originLocationId,
       destinationLocationId: null,
     });
@@ -195,9 +204,9 @@ export async function POST(request: Request) {
           code: originLocation.code,
           warehouseName: originLocation.warehouse.name,
         },
-        quantity,
+        quantity: quantity.toNumber(),
         availableBefore: result.availableBefore,
-        availableAfter: result.availableBefore - quantity,
+        availableAfter: result.availableBefore - quantity.toNumber(),
       },
       { status: 201 },
     );

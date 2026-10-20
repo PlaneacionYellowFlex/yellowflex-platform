@@ -3,8 +3,10 @@ import { NextResponse } from "next/server";
 import { validateInventoryMovement } from "@/engines/warehouse";
 import { apiError } from "@/lib/api-response";
 import { CorporateAuthorizationRequired, requireCorporateUser } from "@/lib/auth/corporate-auth";
-import { getInventoryBalancesByItem, getInventoryItemById, getWarehouseLocationById, getWarehousePermission, listInventoryItems, listWarehouses } from "@/repositories/warehouse.repository";
-import { createWarehouseMovement } from "@/repositories/warehouse-movements.repository";
+import { InvalidWarehouseQuantityError, parseWarehouseQuantity } from "@/lib/warehouse-quantity";
+import { internalTransferIdentity } from "@/lib/warehouse-movement-idempotency";
+import { getInventoryItemById, getWarehouseLocationById, getWarehousePermission, listInventoryItems, listWarehouses } from "@/repositories/warehouse.repository";
+import { createInternalTransfer, InsufficientWarehouseTransferStockError, WarehouseStockOperationConflictError } from "@/repositories/warehouse-movements.repository";
 
 async function requireAccess() {
   const user = await requireCorporateUser();
@@ -37,29 +39,38 @@ export async function POST(request: Request) {
     const itemId=typeof b.itemId==="string"?b.itemId.trim():"";
     const originLocationId=typeof b.originLocationId==="string"?b.originLocationId.trim():"";
     const destinationLocationId=typeof b.destinationLocationId==="string"?b.destinationLocationId.trim():"";
-    const quantity=Number(b.quantity);
+    let quantity;
+    try {
+      quantity=parseWarehouseQuantity(b.quantity);
+    } catch (error) {
+      if (error instanceof InvalidWarehouseQuantityError) {
+        return NextResponse.json({error:error.message},{status:400});
+      }
+      throw error;
+    }
     if(!itemId) return NextResponse.json({error:"Selecciona un artículo."},{status:400});
-    const v=validateInventoryMovement({type:"INTERNAL_TRANSFER",quantity,originLocationId,destinationLocationId});
+    const v=validateInventoryMovement({type:"INTERNAL_TRANSFER",quantity:quantity.toNumber(),originLocationId,destinationLocationId});
     if(!v.valid) return NextResponse.json({error:v.error},{status:400});
-    const [item,origin,destination,balances]=await Promise.all([
+    const referenceType=optional(b.referenceType),referenceNumber=optional(b.referenceNumber),notes=optional(b.notes);
+    const payload={itemId,originLocationId,destinationLocationId,quantity:quantity.toFixed(3),referenceType,referenceNumber,notes};
+    const identity=internalTransferIdentity(request,user.id,payload);
+    if(!identity)return NextResponse.json({error:"Se requiere Idempotency-Key con UUID válido."},{status:400});
+    const [item,origin,destination]=await Promise.all([
       getInventoryItemById(itemId),getWarehouseLocationById(originLocationId),
-      getWarehouseLocationById(destinationLocationId),getInventoryBalancesByItem(itemId)
+      getWarehouseLocationById(destinationLocationId)
     ]);
     if(!item?.active) return NextResponse.json({error:"El artículo no existe o está inactivo."},{status:400});
     if(!origin?.active || !origin.warehouse.active) return NextResponse.json({error:"La ubicación de origen no está disponible."},{status:400});
     if(!destination?.active || !destination.warehouse.active) return NextResponse.json({error:"La ubicación de destino no está disponible."},{status:400});
-    const available=balances.find(x=>x.locationId===originLocationId)?.quantity ?? 0;
-    if(available<quantity) return NextResponse.json({error:`Existencia insuficiente en ${origin.code}. Disponible: ${available} ${item.baseUnit}.`},{status:409});
-    const m=await createWarehouseMovement({
-      folio:folio(),itemId:item.id,type:"INTERNAL_TRANSFER",quantity,unit:item.baseUnit,
-      originLocationId:origin.id,destinationLocationId:destination.id,
-      referenceType:optional(b.referenceType),referenceNumber:optional(b.referenceNumber),
-      notes:optional(b.notes),occurredAt:new Date(),actorId:user.id
+    const result=await createInternalTransfer({
+      folio:folio(),itemId:item.id,quantity,unit:item.baseUnit,
+      originLocationId:origin.id,originLocationCode:origin.code,destinationLocationId:destination.id,
+      referenceType,referenceNumber,notes,occurredAt:new Date(),actorId:user.id,
+      operationKey:identity.operationKey,operationPayloadHash:identity.operationPayloadHash,
     });
-    return NextResponse.json({movement:{
-      folio:m.folio,itemId:m.itemId,itemCode:m.item.code,quantity:m.quantity.toNumber(),unit:m.unit,
-      originLocation:m.originLocation?{id:m.originLocation.id,code:m.originLocation.code}:null,
-      destinationLocation:m.destinationLocation?{id:m.destinationLocation.id,code:m.destinationLocation.code}:null
-    }},{status:201});
-  } catch(e) { return apiError(e); }
+    return NextResponse.json(result,{status:201});
+  } catch(e) {
+    if(e instanceof InsufficientWarehouseTransferStockError || e instanceof WarehouseStockOperationConflictError) return NextResponse.json({error:e.message},{status:409});
+    return apiError(e);
+  }
 }
