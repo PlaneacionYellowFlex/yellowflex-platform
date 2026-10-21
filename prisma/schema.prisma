@@ -44,6 +44,7 @@ model User {
   warehouseCountsCreated    WarehouseCount[]             @relation("WarehouseCountCreator")
   warehouseCountsCompleted  WarehouseCount[]             @relation("WarehouseCountCounter")
   discrepancyInvestigations WarehouseDiscrepancy[] @relation("WarehouseDiscrepancyInvestigator")
+  warehouseDiscrepanciesApproved WarehouseDiscrepancy[] @relation("WarehouseDiscrepancyApprover")
   warehouseRecountsRequested WarehouseDiscrepancyRecount[] @relation("WarehouseRecountRequester")
   warehouseRecountsCompleted WarehouseDiscrepancyRecount[] @relation("WarehouseRecountCounter")
 }
@@ -562,6 +563,7 @@ model WarehousePermission {
   canImportInitial    Boolean  @default(false)
   canManageCatalog    Boolean  @default(false)
   canManageWarehouse  Boolean  @default(false)
+  canApproveWarehouseAdjustments Boolean @default(false)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
   user                User     @relation("WarehousePermissionOwner", fields: [userId], references: [id], onDelete: Restrict)
@@ -631,6 +633,7 @@ model InventoryMovement {
   originLocation        WarehouseLocation?    @relation("InventoryMovementOrigin", fields: [originLocationId], references: [id], onDelete: Restrict)
   destinationLocation   WarehouseLocation?    @relation("InventoryMovementDestination", fields: [destinationLocationId], references: [id], onDelete: Restrict)
   actor                 User                  @relation("InventoryMovementActor", fields: [actorId], references: [id], onDelete: Restrict)
+  warehouseDiscrepancyAdjustment WarehouseDiscrepancy? @relation("WarehouseDiscrepancyAdjustment")
 
   @@index([itemId, occurredAt])
   @@index([originLocationId, occurredAt])
@@ -792,9 +795,15 @@ model WarehouseDiscrepancy {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   closedAt       DateTime?
+  approvedById   String?
+  approvedAt     DateTime?
+  approvedQuantity Decimal? @db.Decimal(18,3)
+  movementId     String? @unique
   recounts       WarehouseDiscrepancyRecount[]
   count          WarehouseCount @relation(fields: [countId], references: [id], onDelete: Restrict)
   assignedTo     User? @relation("WarehouseDiscrepancyInvestigator", fields: [assignedToId], references: [id], onDelete: Restrict)
+  approvedBy     User? @relation("WarehouseDiscrepancyApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+  adjustmentMovement InventoryMovement? @relation("WarehouseDiscrepancyAdjustment", fields: [movementId], references: [id], onDelete: Restrict)
   @@index([status, createdAt])
 }
 
