@@ -6,7 +6,7 @@ export async function lockWarehouseStock(
   originLocationId: string,
 ) {
   const lockKey = JSON.stringify([itemId, originLocationId]);
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
 }
 
 export async function getWarehouseStockBalance(
