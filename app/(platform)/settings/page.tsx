@@ -1,4 +1,4 @@
-import { ArrowRight, ShieldCheck, Users } from "lucide-react";
+import { ArrowRight, LockKeyhole, ShieldCheck, Users } from "lucide-react";
 import Link from "next/link";
 
 import PageHeader from "@/components/page-header";
@@ -19,6 +19,14 @@ export default function SettingsPage() {
           </div>
           <h2 className="mt-5 text-lg font-bold text-slate-900">Usuarios y accesos</h2>
           <p className="mt-2 text-sm leading-6 text-slate-500">Busca colaboradores de RH, crea su acceso y modifica posteriormente su perfil, estado y permisos por módulo.</p>
+        </Link>
+        <Link href="/c-panel/warehouse-adjustments" className="group rounded-2xl border border-slate-200 bg-white p-6 transition hover:border-amber-200 hover:shadow-md sm:p-8">
+          <div className="flex items-start justify-between gap-5">
+            <span className="flex size-11 items-center justify-center rounded-xl bg-amber-50 text-amber-700"><LockKeyhole className="size-5" /></span>
+            <ArrowRight className="size-5 text-slate-300 transition group-hover:translate-x-1 group-hover:text-[#0b3a82]" />
+          </div>
+          <h2 className="mt-5 text-lg font-bold text-slate-900">C-PANEL · Ajustes de inventario</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-500">Consulta y administra autorizaciones críticas. Todos pueden ver esta opción; solo los responsables autorizados pueden operar.</p>
         </Link>
         <section className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8">
           <div className="flex gap-4">
