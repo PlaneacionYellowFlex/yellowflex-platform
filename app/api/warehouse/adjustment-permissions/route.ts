@@ -19,15 +19,20 @@ export async function GET() {
     if (access?.canManageAdjustmentPermissions !== true) {
       return NextResponse.json({ error: "No autorizado." }, { status: 403 });
     }
-    const users = await db.user.findMany({
+    const [users, audit] = await Promise.all([db.user.findMany({
       where: { active: true },
       select: {
         id: true, name: true, email: true,
         warehousePermission: { select: { canApproveWarehouseAdjustments: true } },
       },
       orderBy: { name: "asc" },
-    });
+    }), db.warehousePermissionAudit.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      include: { actor: { select: { name: true } }, targetUser: { select: { name: true } } },
+    })]);
     return NextResponse.json({
+      audit: audit.map(entry => ({ id: entry.id, actor: entry.actor.name, target: entry.targetUser.name, action: entry.action, reason: entry.reason, createdAt: entry.createdAt })),
       users: users.map(user => ({
         id: user.id, name: user.name, email: user.email,
         canApproveWarehouseAdjustments: user.warehousePermission?.canApproveWarehouseAdjustments === true,
