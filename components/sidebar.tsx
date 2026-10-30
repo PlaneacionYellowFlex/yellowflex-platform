@@ -93,6 +93,7 @@ function Navigation({
 export default function Sidebar() {
   const [isOpen, setIsOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [canManageAdjustments, setCanManageAdjustments] = useState(false);
   const close = () => setIsOpen(false);
 
   useEffect(() => {
@@ -100,6 +101,9 @@ export default function Sidebar() {
     void fetch("/api/admin/corporate-access", { cache: "no-store", credentials: "same-origin" })
       .then((response) => { if (mounted) setIsAdmin(response.ok); })
       .catch(() => { if (mounted) setIsAdmin(false); });
+    void fetch("/api/warehouse/adjustment-permissions", { cache: "no-store", credentials: "same-origin" })
+      .then(response => { if (mounted) setCanManageAdjustments(response.ok); })
+      .catch(() => { if (mounted) setCanManageAdjustments(false); });
     return () => { mounted = false; };
   }, []);
 
@@ -149,6 +153,14 @@ export default function Sidebar() {
           <div className="my-5 border-t border-white/10" />
 
           <Navigation items={secondaryNavigation} close={close} />
+
+          {canManageAdjustments && (
+            <>
+              <div className="my-5 border-t border-white/10" />
+              <p className="mb-2 px-3 text-[9px] font-black uppercase tracking-[0.16em] text-blue-300/80">C-PANEL</p>
+              <Navigation items={[{ href: "/c-panel/warehouse-adjustments", label: "Permisos de ajustes", description: "Autorizaciones de inventario", icon: LockKeyhole }]} close={close} />
+            </>
+          )}
 
           {isAdmin && (
             <>
