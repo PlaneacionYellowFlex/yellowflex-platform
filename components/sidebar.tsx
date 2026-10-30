@@ -143,21 +143,19 @@ export default function Sidebar() {
 
           <Navigation items={secondaryNavigation} close={close} />
 
-          {true && (
-            <>
+          <>
+
               <div className="my-5 border-t border-white/10" />
               <p className="mb-2 px-3 text-[9px] font-black uppercase tracking-[0.16em] text-blue-300/80">C-PANEL</p>
               <Navigation items={[{ href: "/c-panel/warehouse-adjustments", label: "Permisos de ajustes", description: "Autorizaciones de inventario", icon: LockKeyhole }]} close={close} />
-            </>
-          )}
+          </>
 
           {true && (
             <>
               <div className="my-5 border-t border-white/10" />
               <p className="mb-2 px-3 text-[9px] font-black uppercase tracking-[0.16em] text-blue-300/80">Administración</p>
               <Navigation items={[{ href: "/settings/corporate-access", label: "Usuarios y accesos", description: "Administración de usuarios, roles y permisos corporativos.", icon: Settings2 }]} close={close} />
-            </>
-          )}
+          </>
         </div>
 
         <div className="border-t border-white/10 p-5">
