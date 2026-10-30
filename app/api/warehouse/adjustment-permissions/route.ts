@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { requireCorporateUser } from "@/lib/auth/corporate-auth";
+import { requireCorporateUser, CorporateAuthenticationRequired } from "@/lib/auth/corporate-auth";
 
 const changeSchema = z.object({
   userId: z.string().min(1),
@@ -38,7 +38,8 @@ export async function GET() {
         canApproveWarehouseAdjustments: user.warehousePermission?.canApproveWarehouseAdjustments === true,
       })),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof CorporateAuthenticationRequired) return NextResponse.json({ error: "Inicia sesión para continuar." }, { status: 401 });
     return NextResponse.json({ error: "No fue posible consultar permisos." }, { status: 500 });
   }
 }
@@ -80,7 +81,8 @@ export async function PATCH(request: Request) {
     if (result.status === 403) return NextResponse.json({ error: "No autorizado." }, { status: 403 });
     if (result.status === 404) return NextResponse.json({ error: "Usuario no encontrado o inactivo." }, { status: 404 });
     return NextResponse.json({ changed: result.changed });
-  } catch {
+  } catch (error) {
+    if (error instanceof CorporateAuthenticationRequired) return NextResponse.json({ error: "Inicia sesión para continuar." }, { status: 401 });
     return NextResponse.json({ error: "No fue posible actualizar el permiso." }, { status: 500 });
   }
 }
