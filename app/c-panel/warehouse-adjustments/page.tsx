@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+type AuditEntry = { id: string; actor: string; target: string; action: string; reason: string; createdAt: string };
+
 type UserPermission = {
   id: string;
   name: string;
@@ -11,6 +13,7 @@ type UserPermission = {
 
 export default function WarehouseAdjustmentPermissionsPage() {
   const [users, setUsers] = useState<UserPermission[]>([]);
+  const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -27,6 +30,7 @@ export default function WarehouseAdjustmentPermissionsPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "No fue posible consultar los permisos.");
       setUsers(data.users);
+      setAudit(data.audit ?? []);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Error de consulta.");
     } finally {
@@ -112,6 +116,19 @@ export default function WarehouseAdjustmentPermissionsPage() {
             </table>
           </div>
         )}
+
+        <section className="mt-10" aria-labelledby="audit-title">
+          <h2 id="audit-title" className="text-xl font-bold text-blue-950">Historial de autorizaciones</h2>
+          <p className="mt-1 text-sm text-slate-600">Últimos 50 cambios registrados.</p>
+          <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full min-w-[650px] text-left text-sm">
+              <thead className="bg-blue-950 text-white"><tr><th className="p-3">Fecha</th><th className="p-3">Responsable</th><th className="p-3">Colaborador</th><th className="p-3">Acción</th><th className="p-3">Motivo</th></tr></thead>
+              <tbody>{audit.map(entry => <tr key={entry.id} className="border-t border-slate-200"><td className="p-3">{new Date(entry.createdAt).toLocaleString("es-MX")}</td><td className="p-3">{entry.actor}</td><td className="p-3">{entry.target}</td><td className="p-3">{entry.action === "GRANT_ADJUSTMENT_APPROVAL" ? "Concedido" : "Revocado"}</td><td className="p-3">{entry.reason}</td></tr>)}
+                {audit.length === 0 && <tr><td colSpan={5} className="p-4 text-center text-slate-500">Sin cambios registrados.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
 
         {pending && (
           <div role="dialog" aria-modal="true" aria-labelledby="confirmation-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
