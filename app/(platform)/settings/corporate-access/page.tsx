@@ -11,6 +11,7 @@ import {
   Users,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import AccessRestricted from "@/components/access-restricted";
 
 type PermissionKey =
   | "canRequest"
@@ -109,6 +110,7 @@ export default function CorporateAccessPage() {
   const [permissions, setPermissions] = useState<Permissions>({ ...emptyPermissions });
   const [initialPassword, setInitialPassword] = useState("");
   const [error, setError] = useState("");
+  const [restricted, setRestricted] = useState(false);
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -119,7 +121,9 @@ export default function CorporateAccessPage() {
       credentials: "same-origin",
     });
     const data = (await response.json()) as ResponseBody;
+    if (response.status === 403) { setRestricted(true); return; }
     if (!response.ok) throw new Error(data.error ?? "Sin acceso.");
+    setRestricted(false);
     setEmployees(data.employees ?? []);
     setUsers(data.users ?? []);
   }, []);
@@ -277,6 +281,8 @@ export default function CorporateAccessPage() {
       setBusy(false);
     }
   }
+
+  if (restricted) return <AccessRestricted moduleName="Usuarios y accesos" detail="La administración de perfiles está reservada a Recursos Humanos y Administración." />;
 
   return (
     <main className="mx-auto w-full max-w-7xl space-y-6 pb-10">
