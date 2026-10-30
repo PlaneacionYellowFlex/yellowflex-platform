@@ -147,7 +147,7 @@ export default function Sidebar() {
 
               <div className="my-5 border-t border-white/10" />
               <p className="mb-2 px-3 text-[9px] font-black uppercase tracking-[0.16em] text-blue-300/80">C-PANEL</p>
-              <Navigation items={[{ href: "/c-panel/warehouse-adjustments", label: "Permisos de ajustes", description: "Autorizaciones de inventario", icon: LockKeyhole }]} close={close} />
+              <Navigation items={[{ href: "/c-panel", label: "C-PANEL", description: "Autorizaciones de inventario", icon: LockKeyhole }]} close={close} />
           </>
 
           <>
