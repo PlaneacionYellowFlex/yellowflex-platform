@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import AccessRestricted from "@/components/access-restricted";
 
 type AuditEntry = { id: string; actor: string; target: string; action: string; reason: string; createdAt: string };
 
@@ -18,6 +19,7 @@ export default function WarehouseAdjustmentPermissionsPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [restricted, setRestricted] = useState(false);
   const [notice, setNotice] = useState("");
   const [pending, setPending] = useState<UserPermission | null>(null);
   const [reason, setReason] = useState("");
@@ -25,9 +27,11 @@ export default function WarehouseAdjustmentPermissionsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
+    setRestricted(false);
     try {
       const response = await fetch("/api/warehouse/adjustment-permissions", { cache: "no-store" });
       const data = await response.json();
+      if (response.status === 403) { setRestricted(true); setUsers([]); setAudit([]); return; }
       if (!response.ok) throw new Error(data.error ?? "No fue posible consultar los permisos.");
       setUsers(data.users);
       setAudit(data.audit ?? []);
@@ -71,6 +75,8 @@ export default function WarehouseAdjustmentPermissionsPage() {
       setBusyId(null);
     }
   }
+
+  if (restricted) return <AccessRestricted moduleName="las autorizaciones de inventario" detail="Solicita al responsable de permisos que revise tu acceso." />;
 
   return (
     <main className="min-h-screen bg-white px-5 py-10 text-slate-900">
