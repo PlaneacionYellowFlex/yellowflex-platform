@@ -44,11 +44,8 @@ export async function approveDiscrepancyAdjustment(id: string, actorId: string, 
     if (!investigation.cause?.trim() || !investigation.resolution?.trim()) throw new WarehouseDiscrepancyError("Documenta la causa y resolución antes de aprobar.");
     const recount = investigation.recounts[0];
     if (!recount?.completedAt || recount.countedQuantity === null || recount.difference === null) throw new WarehouseDiscrepancyError("Se requiere un reconteo completado.");
-    const [approvalPermission, elevatedRoles] = await Promise.all([
-      tx.warehousePermission.findUnique({ where: { userId: actorId }, select: { canApproveWarehouseAdjustments: true } }),
-      tx.userRole.findMany({ where: { userId: actorId, role: { in: ["ADMIN", "DIRECCION"] } }, select: { role: true } }),
-    ]);
-    try { authorizeDiscrepancyAdjustment({ authorized: approvalPermission?.canApproveWarehouseAdjustments === true || elevatedRoles.length > 0, approverId: actorId, countActorId: investigation.count.countedById, recountActorId: recount.completedById }); } catch (error) { throw new WarehouseDiscrepancyError(error instanceof Error ? error.message : "No tienes autorización."); }
+    const approvalPermission = await tx.warehousePermission.findUnique({ where: { userId: actorId }, select: { canApproveWarehouseAdjustments: true } });
+    try { authorizeDiscrepancyAdjustment({ authorized: approvalPermission?.canApproveWarehouseAdjustments === true, approverId: actorId, countActorId: investigation.count.countedById, recountActorId: recount.completedById }); } catch (error) { throw new WarehouseDiscrepancyError(error instanceof Error ? error.message : "No tienes autorización."); }
 
     const { item, location } = investigation.count;
     await lockWarehouseStock(tx, item.id, location.id);
