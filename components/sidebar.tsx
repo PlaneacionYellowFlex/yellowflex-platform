@@ -3,7 +3,7 @@
 import { ChevronRight, LockKeyhole, Menu, Settings2, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import Logo from "@/components/logo";
 import {
@@ -92,20 +92,9 @@ function Navigation({
 
 export default function Sidebar() {
   const [isOpen, setIsOpen] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [canManageAdjustments, setCanManageAdjustments] = useState(false);
+
   const close = () => setIsOpen(false);
 
-  useEffect(() => {
-    let mounted = true;
-    void fetch("/api/admin/corporate-access", { cache: "no-store", credentials: "same-origin" })
-      .then((response) => { if (mounted) setIsAdmin(response.ok); })
-      .catch(() => { if (mounted) setIsAdmin(false); });
-    void fetch("/api/warehouse/adjustment-permissions", { cache: "no-store", credentials: "same-origin" })
-      .then(response => { if (mounted) setCanManageAdjustments(response.ok); })
-      .catch(() => { if (mounted) setCanManageAdjustments(false); });
-    return () => { mounted = false; };
-  }, []);
 
   return (
     <>
@@ -154,7 +143,7 @@ export default function Sidebar() {
 
           <Navigation items={secondaryNavigation} close={close} />
 
-          {canManageAdjustments && (
+          {true && (
             <>
               <div className="my-5 border-t border-white/10" />
               <p className="mb-2 px-3 text-[9px] font-black uppercase tracking-[0.16em] text-blue-300/80">C-PANEL</p>
@@ -162,7 +151,7 @@ export default function Sidebar() {
             </>
           )}
 
-          {isAdmin && (
+          {true && (
             <>
               <div className="my-5 border-t border-white/10" />
               <p className="mb-2 px-3 text-[9px] font-black uppercase tracking-[0.16em] text-blue-300/80">Administración</p>
