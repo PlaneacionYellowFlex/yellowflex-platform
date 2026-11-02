@@ -19,4 +19,4 @@ jobs:
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/test
       - run: npx tsc --noEmit
-      - run: npx eslint app/c-panel components/access-restricted.tsx
+      - run: npx eslint app/c-panel components/access-restricted.tsx "app/(platform)/settings/corporate-access/page.tsx" app/api/admin/corporate-access/route.ts app/api/warehouse/adjustment-permissions/route.ts "app/api/warehouse/discrepancies/[id]/approve/route.ts"
