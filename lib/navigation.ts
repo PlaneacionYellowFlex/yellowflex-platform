@@ -175,6 +175,16 @@ const pageContexts: Record<
     section: "Plataforma",
     description: "Preferencias y administración",
   },
+  "/c-panel": {
+    title: "C-PANEL",
+    section: "Administración corporativa",
+    description: "Centro de gestión de accesos y autorizaciones",
+  },
+  "/c-panel/warehouse-adjustments": {
+    title: "Permisos de ajustes",
+    section: "C-PANEL",
+    description: "Autorizaciones y auditoría de ajustes de inventario",
+  },
   "/settings/corporate-access": {
     title: "Usuarios y accesos",
     section: "Configuración",

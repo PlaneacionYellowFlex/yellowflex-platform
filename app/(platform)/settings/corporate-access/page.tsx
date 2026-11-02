@@ -11,6 +11,7 @@ import {
   Users,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import AccessRestricted from "@/components/access-restricted";
 
 type PermissionKey =
   | "canRequest"
@@ -109,6 +110,7 @@ export default function CorporateAccessPage() {
   const [permissions, setPermissions] = useState<Permissions>({ ...emptyPermissions });
   const [initialPassword, setInitialPassword] = useState("");
   const [error, setError] = useState("");
+  const [restricted, setRestricted] = useState(false);
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -119,16 +121,26 @@ export default function CorporateAccessPage() {
       credentials: "same-origin",
     });
     const data = (await response.json()) as ResponseBody;
+    if (response.status === 403) { setRestricted(true); return; }
     if (!response.ok) throw new Error(data.error ?? "Sin acceso.");
+    setRestricted(false);
     setEmployees(data.employees ?? []);
     setUsers(data.users ?? []);
   }, []);
 
   useEffect(() => {
-    setLoading(true);
-    void load()
-      .catch((e) => setError(e instanceof Error ? e.message : "No fue posible cargar."))
-      .finally(() => setLoading(false));
+    let active = true;
+    void Promise.resolve().then(async () => {
+      if (!active) return;
+      try {
+        await load();
+      } catch (e) {
+        if (active) setError(e instanceof Error ? e.message : "No fue posible cargar.");
+      } finally {
+        if (active) setLoading(false);
+      }
+    });
+    return () => { active = false; };
   }, [load]);
 
   const userByEmployee = useMemo(() => {
@@ -277,6 +289,8 @@ export default function CorporateAccessPage() {
       setBusy(false);
     }
   }
+
+  if (restricted) return <AccessRestricted moduleName="Usuarios y accesos" detail="La administración de perfiles está reservada a Recursos Humanos y Administración." />;
 
   return (
     <main className="mx-auto w-full max-w-7xl space-y-6 pb-10">
@@ -428,6 +442,7 @@ export default function CorporateAccessPage() {
 
               <div>
                 <h3 className="font-bold text-blue-950">Permisos de Compras</h3>
+                <p className="mt-1 text-xs text-slate-500">Estos permisos son independientes del rol corporativo. Las autorizaciones de ajustes de inventario se administran por separado en C-PANEL.</p>
                 <div className="mt-3 space-y-2">
                   {permissionRows.map((p) => (
                     <label key={p.key} className="flex gap-3 rounded-xl border p-3">

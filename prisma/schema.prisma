@@ -36,6 +36,8 @@ model User {
   hrRequestEvents           HrRequestEvent[]           @relation("HrRequestEventActor")
   managedEmployeeProfiles   EmployeeProfile[]          @relation("EmployeeProfileManagerUser")
   warehousePermission       WarehousePermission?       @relation("WarehousePermissionOwner")
+  warehousePermissionChangesMade WarehousePermissionAudit[] @relation("WarehousePermissionAuditActor")
+  warehousePermissionChangesReceived WarehousePermissionAudit[] @relation("WarehousePermissionAuditTarget")
   inventoryMovements        InventoryMovement[]         @relation("InventoryMovementActor")
   inventoryCustodiesCreated InventoryCustody[]          @relation("InventoryCustodyCreator")
   inventoryCustodyEvents    InventoryCustodyEvent[]     @relation("InventoryCustodyEventActor")
@@ -564,9 +566,26 @@ model WarehousePermission {
   canManageCatalog    Boolean  @default(false)
   canManageWarehouse  Boolean  @default(false)
   canApproveWarehouseAdjustments Boolean @default(false)
+  canManageAdjustmentPermissions Boolean @default(false)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
   user                User     @relation("WarehousePermissionOwner", fields: [userId], references: [id], onDelete: Restrict)
+}
+
+model WarehousePermissionAudit {
+  id          String   @id @default(cuid())
+  actorId     String
+  targetUserId String
+  action      String
+  oldValue    Boolean
+  newValue    Boolean
+  reason      String
+  createdAt   DateTime @default(now())
+  actor       User     @relation("WarehousePermissionAuditActor", fields: [actorId], references: [id], onDelete: Restrict)
+  targetUser  User     @relation("WarehousePermissionAuditTarget", fields: [targetUserId], references: [id], onDelete: Restrict)
+
+  @@index([targetUserId, createdAt])
+  @@index([actorId, createdAt])
 }
 
 model InventoryItem {

@@ -59,9 +59,9 @@ const noPermissions = {
 
 async function administrator() {
   const user = await requireCorporateUser();
-  if (!user.roles.includes("ADMIN")) {
+  if (!user.roles.includes("ADMIN") && !user.roles.includes("RH")) {
     throw new CorporateAuthorizationRequired(
-      "Solo Administrador puede gestionar usuarios y accesos corporativos.",
+      "Solo RH o Administración puede gestionar perfiles corporativos.",
     );
   }
   return user;
@@ -140,6 +140,10 @@ export async function POST(request: Request) {
   try {
     await administrator();
     const input = createSchema.parse(await request.json());
+    const actor = await requireCorporateUser();
+    if (!actor.roles.includes("ADMIN") && input.roles.some(role => role === "ADMIN" || role === "DIRECCION")) {
+      return NextResponse.json({ error: "RH no puede asignar roles privilegiados." }, { status: 403 });
+    }
     const email = input.email.toLowerCase();
     const pError = permissionError(input.purchasePermissions);
     if (pError) return NextResponse.json({ error: pError }, { status: 422 });
@@ -213,12 +217,18 @@ export async function PATCH(request: Request) {
     const pError = permissionError(input.purchasePermissions);
     if (pError) return NextResponse.json({ error: pError }, { status: 422 });
 
+    if (!actor.roles.includes("ADMIN") && input.roles.some(role => role === "ADMIN" || role === "DIRECCION")) {
+      return NextResponse.json({ error: "RH no puede asignar roles privilegiados." }, { status: 403 });
+    }
     const target = await db.user.findUnique({
       where: { id: input.userId },
-      select: { id: true },
+      select: { id: true, roles: { select: { role: true } } },
     });
     if (!target) {
       return NextResponse.json({ error: "La cuenta ya no existe." }, { status: 404 });
+    }
+    if (!actor.roles.includes("ADMIN") && target.roles.some(entry => entry.role === "ADMIN" || entry.role === "DIRECCION")) {
+      return NextResponse.json({ error: "RH no puede modificar cuentas privilegiadas." }, { status: 403 });
     }
 
     if (actor.id === input.userId && !input.active) {
@@ -227,11 +237,15 @@ export async function PATCH(request: Request) {
         { status: 422 },
       );
     }
-    if (actor.id === input.userId && !input.roles.includes("ADMIN")) {
+    if (actor.id === input.userId && actor.roles.includes("ADMIN") && !input.roles.includes("ADMIN")) {
       return NextResponse.json(
         { error: "No puedes retirar tu propio rol ADMIN desde esta pantalla." },
         { status: 422 },
       );
+    }
+
+    if (actor.id === input.userId && actor.roles.includes("RH") && !actor.roles.includes("ADMIN") && !input.roles.includes("RH")) {
+      return NextResponse.json({ error: "No puedes retirar tu propio rol RH desde esta pantalla." }, { status: 422 });
     }
 
     const emailOwner = await db.user.findUnique({

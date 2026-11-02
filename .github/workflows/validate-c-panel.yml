@@ -1,0 +1,27 @@
+name: Validate C-PANEL
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - feature/warehouse-explicit-adjustment-permissions-20261030
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+      - run: npx tsx --test tests/warehouse-discrepancy-adjustment.test.ts
+      - run: npx prisma validate
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+          DIRECT_URL: postgresql://test:test@localhost:5432/test
+      - run: npx tsc --noEmit
+      - run: npx eslint app/c-panel components/access-restricted.tsx "app/(platform)/settings/corporate-access/page.tsx" app/api/admin/corporate-access/route.ts app/api/warehouse/adjustment-permissions/route.ts "app/api/warehouse/discrepancies/[id]/approve/route.ts"
