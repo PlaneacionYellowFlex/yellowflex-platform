@@ -129,10 +129,18 @@ export default function CorporateAccessPage() {
   }, []);
 
   useEffect(() => {
-    setLoading(true);
-    void load()
-      .catch((e) => setError(e instanceof Error ? e.message : "No fue posible cargar."))
-      .finally(() => setLoading(false));
+    let active = true;
+    void Promise.resolve().then(async () => {
+      if (!active) return;
+      try {
+        await load();
+      } catch (e) {
+        if (active) setError(e instanceof Error ? e.message : "No fue posible cargar.");
+      } finally {
+        if (active) setLoading(false);
+      }
+    });
+    return () => { active = false; };
   }, [load]);
 
   const userByEmployee = useMemo(() => {
