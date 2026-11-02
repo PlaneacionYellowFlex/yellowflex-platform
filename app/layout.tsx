@@ -9,7 +9,7 @@ export const metadata: Metadata = {
   description: "Centro digital de operación de YellowFlex.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="es" className="h-full antialiased">
       <body className="min-h-full">{children}</body>
