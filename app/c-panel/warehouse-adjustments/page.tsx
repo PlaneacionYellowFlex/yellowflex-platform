@@ -42,7 +42,13 @@ export default function WarehouseAdjustmentPermissionsPage() {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void Promise.resolve().then(() => {
+      if (!controller.signal.aborted) void load();
+    });
+    return () => controller.abort();
+  }, [load]);
 
   const filtered = users.filter(user =>
     (user.name + " " + user.email).toLocaleLowerCase().includes(query.toLocaleLowerCase())
