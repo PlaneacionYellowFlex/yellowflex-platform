@@ -434,6 +434,7 @@ export default function CorporateAccessPage() {
 
               <div>
                 <h3 className="font-bold text-blue-950">Permisos de Compras</h3>
+                <p className="mt-1 text-xs text-slate-500">Estos permisos son independientes del rol corporativo. Las autorizaciones de ajustes de inventario se administran por separado en C-PANEL.</p>
                 <div className="mt-3 space-y-2">
                   {permissionRows.map((p) => (
                     <label key={p.key} className="flex gap-3 rounded-xl border p-3">
