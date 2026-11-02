@@ -244,6 +244,10 @@ export async function PATCH(request: Request) {
       );
     }
 
+    if (actor.id === input.userId && actor.roles.includes("RH") && !actor.roles.includes("ADMIN") && !input.roles.includes("RH")) {
+      return NextResponse.json({ error: "No puedes retirar tu propio rol RH desde esta pantalla." }, { status: 422 });
+    }
+
     const emailOwner = await db.user.findUnique({
       where: { email },
       select: { id: true },
