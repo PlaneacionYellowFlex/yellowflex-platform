@@ -237,7 +237,7 @@ export async function PATCH(request: Request) {
         { status: 422 },
       );
     }
-    if (actor.id === input.userId && !input.roles.includes("ADMIN")) {
+    if (actor.id === input.userId && actor.roles.includes("ADMIN") && !input.roles.includes("ADMIN")) {
       return NextResponse.json(
         { error: "No puedes retirar tu propio rol ADMIN desde esta pantalla." },
         { status: 422 },
