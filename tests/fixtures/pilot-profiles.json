@@ -1,0 +1,121 @@
+{
+  "status": "SPECIFICATION_ONLY_NOT_SEEDED",
+  "database": "yellowflex_restore_test",
+  "host": "127.0.0.1",
+  "port": 55432,
+  "rules": [
+    "Use only newly-created QA-PILOT entities; never select existing first user/item.",
+    "Generate random passwords at seed time; do not store plaintext in Git.",
+    "Mark all records by unique run ID; cleanup only records owned by that run.",
+    "Use a synthetic department, shift, employee, item, warehouse and locations."
+  ],
+  "profiles": [
+    {
+      "key": "admin",
+      "name": "QA Pilot ADMIN",
+      "email": "qa.pilot.admin@example.invalid",
+      "roles": [
+        "ADMIN"
+      ],
+      "employeeNumber": null,
+      "permissions": [],
+      "expected": "Gobierno de permisos; sin permisos especializados automáticos de Compras."
+    },
+    {
+      "key": "rh-delegado",
+      "name": "QA Pilot RH Delegado",
+      "email": "qa.pilot.rh@example.invalid",
+      "roles": [
+        "RH"
+      ],
+      "employeeNumber": "QA-PILOT-RH",
+      "permissions": [
+        "c-panel/manage",
+        "rrhh/view",
+        "rrhh/operate",
+        "rrhh/approve",
+        "food-services/view",
+        "food-services/manage"
+      ],
+      "expected": "Delegación explícita; no puede asignar approve/audit/manage, modificarse a sí mismo ni administrar ADMIN/DIRECCION."
+    },
+    {
+      "key": "administrativo",
+      "name": "QA Pilot Administrativo",
+      "email": "qa.pilot.admin-op@example.invalid",
+      "roles": [
+        "PLANEACION"
+      ],
+      "employeeNumber": "QA-PILOT-ADM",
+      "permissions": [
+        "purchases/view",
+        "purchases/operate",
+        "my-rh/view",
+        "my-rh/operate"
+      ],
+      "purchasePermissions": {
+        "canRequest": true,
+        "canRequestUrgent": false,
+        "canAuthorize": false,
+        "canViewAll": false,
+        "canManagePurchases": false
+      },
+      "expected": "Consulta OEE y Compras propias; deniega urgentes, aprobación, gobierno y expedientes RH."
+    },
+    {
+      "key": "produccion",
+      "name": "QA Pilot Produccion",
+      "email": null,
+      "roles": [
+        "PRODUCCION"
+      ],
+      "employeeNumber": "QA-PILOT-PROD",
+      "permissions": [
+        "warehouse/view",
+        "warehouse/operate",
+        "food-services/view",
+        "food-services/operate",
+        "my-rh/view",
+        "my-rh/operate"
+      ],
+      "expected": "Login por número; recepción y consumo de custodias; sin consulta global de inventario ni ajustes."
+    },
+    {
+      "key": "warehouse",
+      "name": "QA Pilot Warehouse",
+      "email": "qa.pilot.warehouse@example.invalid",
+      "roles": [
+        "PLANEACION"
+      ],
+      "employeeNumber": "QA-PILOT-WH",
+      "permissions": [
+        "warehouse/view",
+        "warehouse/operate",
+        "warehouse/approve"
+      ],
+      "warehousePermissions": {
+        "canViewInventory": true,
+        "canRegisterMovement": true,
+        "canImportInitial": false,
+        "canManageCatalog": false,
+        "canManageWarehouse": true,
+        "canApproveWarehouseAdjustments": true
+      },
+      "expected": "Inventario, movimientos, reconteos y aprobación ajena; conserva separación contador/aprobador."
+    },
+    {
+      "key": "chef-externo",
+      "name": "QA Pilot CHEF Externo",
+      "email": "qa.pilot.chef@example.invalid",
+      "roles": [
+        "CHEF"
+      ],
+      "employeeNumber": null,
+      "permissions": [
+        "food-services/view",
+        "food-services/operate"
+      ],
+      "expected": "Demanda y menú sin Employee; deniega exportar sin audit, RH, C-PANEL, Control Tower y operaciones de empleado."
+    }
+  ]
+}

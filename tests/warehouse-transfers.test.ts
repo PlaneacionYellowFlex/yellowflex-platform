@@ -1,3 +1,4 @@
+import { configureIsolatedConnection, assertIsolatedIdentity } from "./helpers/isolated-postgres.cjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -41,47 +42,28 @@ test("transfer identity scopes operation key to actor and kind", () => {
 test("internal transfer idempotency integration against isolated PostgreSQL", {
   skip: process.env.RUN_WAREHOUSE_TRANSFER_DB_TESTS !== "1",
 }, async (t) => {
-  for (const name of ["DATABASE_URL", "DIRECT_URL"] as const) {
-    const value = process.env[name];
-    assert.ok(value, `DETENIDO: falta ${name}`);
-    let url: URL;
-    try {
-      url = new URL(value);
-    } catch {
-      assert.fail(`DETENIDO: ${name} no es una URL válida`);
-    }
-    assert.ok(
-      (url.protocol === "postgres:" || url.protocol === "postgresql:") &&
-        url.hostname === "127.0.0.1" &&
-        url.port === "55432" &&
-        url.pathname === "/yellowflex_idempotencia_test",
-      `DETENIDO: ${name} no apunta al PostgreSQL aislado autorizado`,
-    );
-  }
-
+  const localUrl = configureIsolatedConnection();
   const { PrismaClient } = await import("@prisma/client");
-  const db = new PrismaClient();
+  const db = new PrismaClient({ datasourceUrl: localUrl });
+  let fixtureActorId: string | undefined;
+  let fixtureItemId: string | undefined;
+  const runId = randomUUID();
   try {
-    const identity = await db.$queryRaw<Array<{ database: string; host: string; port: number }>>`
-      SELECT current_database() AS database, host(inet_server_addr()) AS host, inet_server_port() AS port
-    `;
-    assert.deepEqual(identity, [{ database: "yellowflex_idempotencia_test", host: "127.0.0.1", port: 55432 }]);
+    await assertIsolatedIdentity(db);
 
-    const [actor, warehouseArea, productionArea] = await Promise.all([
-      db.user.findFirst({ where: { active: true }, select: { id: true } }),
+    const [warehouseArea, productionArea] = await Promise.all([
       db.operationalArea.findUnique({ where: { code: "ALMACEN" }, select: { id: true, active: true } }),
       db.operationalArea.findUnique({ where: { code: "PRODUCCION" }, select: { id: true, active: true } }),
     ]);
-    if (!actor || !warehouseArea?.active || !productionArea?.active) {
-      throw new Error("La base aislada requiere usuario activo y áreas ALMACEN/PRODUCCION activas.");
-    }
+    assert.ok(warehouseArea?.active && productionArea?.active, "Faltan catálogos estructurales activos; no se modifica el catálogo restaurado");
+    const actor = await db.user.create({ data: { name: `QA-TRANSFER-${runId}`, email: `qa.transfer.${runId}@example.invalid` }, select: { id: true } });
+    fixtureActorId = actor.id;
     const actorId = actor.id;
 
     const { createInternalTransfer, InsufficientWarehouseTransferStockError, WarehouseStockOperationConflictError } = await import("../repositories/warehouse-movements.repository");
     const { createWarehouseMovement } = await import("../repositories/warehouse-movements.repository");
     const { createOperationalHandoff, InsufficientWarehouseStockError } = await import("../repositories/warehouse-custody.repository");
     const { getWarehouseStockBalance } = await import("../repositories/warehouse-stock-lock");
-    const runId = randomUUID();
 
     async function withFixture<T>(initial: string, run: (fixture: {
       actorId: string;
@@ -256,7 +238,7 @@ test("internal transfer idempotency integration against isolated PostgreSQL", {
         await assert.rejects(transfer(fixture, "3"), InsufficientWarehouseTransferStockError);
         assert.equal((await balance(fixture.itemId, fixture.originLocationId)).toFixed(3), "2.000");
         assert.equal(await db.inventoryMovement.count({ where: { itemId: fixture.itemId, type: "INTERNAL_TRANSFER" } }), 0);
-        assert.equal(await db.warehouseStockOperation.count({ where: { kind: operationKind } }), 0);
+        assert.equal(await db.warehouseStockOperation.count({ where: { kind: operationKind, operationKey: { in: fixture.operationKeys } } }), 0);
       });
     });
 
@@ -302,6 +284,12 @@ test("internal transfer idempotency integration against isolated PostgreSQL", {
       });
     });
   } finally {
-    await db.$disconnect();
+    try {
+      if (fixtureItemId) await db.inventoryItem.delete({ where: { id: fixtureItemId } });
+      if (fixtureActorId) await db.user.delete({ where: { id: fixtureActorId } });
+    } finally {
+      await db.$disconnect();
+      await (globalThis as { prisma?: typeof db }).prisma?.$disconnect();
+    }
   }
 });

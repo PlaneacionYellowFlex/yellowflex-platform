@@ -1,3 +1,4 @@
+import { configureIsolatedConnection, assertIsolatedIdentity } from "./helpers/isolated-postgres.cjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -49,46 +50,26 @@ test("payload changes produce a different hash", () => {
 test("production custody consumption idempotency against PostgreSQL", {
   skip: process.env.RUN_WAREHOUSE_IDEMPOTENCY_DB_TESTS !== "1",
 }, async (t) => {
-  for (const name of ["DATABASE_URL", "DIRECT_URL"] as const) {
-    const value = process.env[name];
-    assert.ok(value, `DETENIDO: falta ${name}`);
-    let url: URL;
-    try {
-      url = new URL(value);
-    } catch {
-      assert.fail(`DETENIDO: ${name} no es una URL válida`);
-    }
-    assert.ok(
-      (url.protocol === "postgres:" || url.protocol === "postgresql:") &&
-        url.hostname === "127.0.0.1" &&
-        url.port === "55432" &&
-        url.pathname === "/yellowflex_idempotencia_test",
-      `DETENIDO: ${name} no apunta a la base aislada autorizada`,
-    );
-  }
-
+  const localUrl = configureIsolatedConnection();
   const { PrismaClient } = await import("@prisma/client");
-  const db = new PrismaClient();
+  const db = new PrismaClient({ datasourceUrl: localUrl });
+  let fixtureActorId: string | undefined;
+  let fixtureItemId: string | undefined;
+  const runId = randomUUID();
   try {
-    const identity = await db.$queryRaw<Array<{ database: string; host: string; port: number }>>`
-      SELECT current_database() AS database, host(inet_server_addr()) AS host, inet_server_port() AS port
-    `;
-    assert.deepEqual(identity, [{ database: "yellowflex_idempotencia_test", host: "127.0.0.1", port: 55432 }]);
+    await assertIsolatedIdentity(db);
 
-    const [actor, item, productionArea] = await Promise.all([
-      db.user.findFirst({ where: { active: true }, select: { id: true } }),
-      db.inventoryItem.findFirst({ where: { active: true }, select: { id: true, baseUnit: true }, orderBy: { code: "asc" } }),
-      db.operationalArea.findUnique({ where: { code: "PRODUCCION" }, select: { id: true, active: true } }),
-    ]);
-    if (!actor || !item || !productionArea?.active) {
-      throw new Error("La base aislada debe tener un actor, artículo y área PRODUCCION activos para las FK de prueba.");
-    }
+    const productionArea = await db.operationalArea.findUnique({ where: { code: "PRODUCCION" }, select: { id: true, active: true } });
+    assert.ok(productionArea?.active, "Falta el catálogo estructural PRODUCCION activo; no se modifica el catálogo restaurado");
+    const actor = await db.user.create({ data: { name: `QA-IDEMPOTENCY-${runId}`, email: `qa.idempotency.${runId}@example.invalid` }, select: { id: true } });
+    fixtureActorId = actor.id;
+    const item = await db.inventoryItem.create({ data: { code: `QA-IDEMPOTENCY-${runId}`, description: "Fictitious integration item", baseUnit: "EA" }, select: { id: true, baseUnit: true } });
+    fixtureItemId = item.id;
     const actorId = actor.id;
     const itemId = item.id;
     const unit = item.baseUnit;
     const productionAreaId = productionArea.id;
     const { consumeProductionCustody, InvalidProductionCustodyOperationError } = await import("../repositories/warehouse-custody.repository");
-    const runId = randomUUID();
     const results: Array<Record<string, number | string>> = [];
 
     async function withCustody<T>(quantity: number, run: (custodyId: string) => Promise<T>) {
@@ -205,6 +186,12 @@ test("production custody consumption idempotency against PostgreSQL", {
 
     t.diagnostic(`WAREHOUSE_IDEMPOTENCY_RESULTS ${JSON.stringify(results)}`);
   } finally {
-    await db.$disconnect();
+    try {
+      if (fixtureItemId) await db.inventoryItem.delete({ where: { id: fixtureItemId } });
+      if (fixtureActorId) await db.user.delete({ where: { id: fixtureActorId } });
+    } finally {
+      await db.$disconnect();
+      await (globalThis as { prisma?: typeof db }).prisma?.$disconnect();
+    }
   }
 });
