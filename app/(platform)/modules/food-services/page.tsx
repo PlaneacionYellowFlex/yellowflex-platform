@@ -1,4 +1,4 @@
-import { ArrowRight, ChefHat, UsersRound, Utensils } from "lucide-react";
+import { ArrowRight, ChefHat, FileSpreadsheet, UsersRound, Utensils } from "lucide-react";
 import Link from "next/link";
 import PageHeader from "@/components/page-header";
 import { getCurrentCorporateUser } from "@/lib/auth/corporate-auth";
@@ -14,6 +14,8 @@ export default async function FoodServicesPage() {
     { title: "Portal del empleado", description: "Consulta el menú y tus reservas.", href: "/modules/food-services/employee", icon: Utensils, visible: Boolean(user.employee) },
     { title: "Gestión de menú", description: "Área exclusiva del chef.", href: "/modules/food-services/chef", icon: ChefHat, visible: user.roles.includes("ADMIN") || user.roles.includes("CHEF") },
     { title: "Administración RH", description: "Gestión y cobros del comedor.", href: "/modules/food-services/hr", icon: UsersRound, visible: canManage },
+    // Las acciones de prenómina se verifican además por permiso C-PANEL dentro de la pantalla y en cada API.
+    { title: "Prenómina", description: "Prenómina masiva del periodo, lotes, anulación y exportación oficial.", href: "/modules/food-services/hr/payroll", icon: FileSpreadsheet, visible: canManage && user.roles.includes("RH") },
   ].filter(area => area.visible);
   return <div className="space-y-8">
     <PageHeader eyebrow="Módulo corporativo" title="Food Services" description="Comedor industrial y servicios para colaboradores." />

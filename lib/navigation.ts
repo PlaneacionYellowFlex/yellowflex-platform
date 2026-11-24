@@ -135,6 +135,11 @@ const pageContexts: Record<
     section: "Food Services",
     description: "Área administrativa",
   },
+  "/modules/food-services/hr/payroll": {
+    title: "Prenómina",
+    section: "Food Services",
+    description: "Lotes de descuento por nómina",
+  },
   "/modules/food-services/consumption": {
     title: "Registro de consumo",
     section: "Food Services",

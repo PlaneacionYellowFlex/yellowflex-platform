@@ -18,10 +18,11 @@ async function requirePayrollAction(action: CpanelAction) {
   return user;
 }
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const user = await requirePayrollAction("view-payroll-batches");
     const { id } = await context.params;
-    return NextResponse.json(await getFoodPayrollBatch(user, id), { headers: NO_STORE });
+    const page = new URL(request.url).searchParams.get("page") ?? "1";
+    return NextResponse.json(await getFoodPayrollBatch(user, id, {}, page), { headers: NO_STORE });
   } catch (error) { return apiError(error); }
 }

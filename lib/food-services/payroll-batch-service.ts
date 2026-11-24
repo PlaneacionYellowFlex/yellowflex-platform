@@ -38,7 +38,7 @@ type Db = PrismaClient | Prisma.TransactionClient;
 type Deps = { db?: PrismaClient };
 
 // ------------------------------------------------------------------ autorización (sin atajo ADMIN)
-async function grantsOk(client: Db, userId: string) {
+export async function grantsOk(client: Db, userId: string) {
   const user = await client.user.findUnique({ where: { id: userId }, include: { roles: true } });
   if (!user?.active || user.passwordMustChange || !user.roles.some(r => r.role === "RH")) return false;
   const grants = await client.corporateModulePermission.findMany({
@@ -78,9 +78,15 @@ export const candidateInclude = {
   payrollAssignments: { where: { status: "ACTIVE" as const }, select: { status: true } },
 };
 
+/** Carga por bloques de 1,000 ids: sin límite práctico de cantidad y sin exceder parámetros de PostgreSQL. */
 export async function loadCandidates(client: Db, ids: readonly string[]) {
-  const orders = await client.foodOrder.findMany({ where: { id: { in: [...ids] } }, include: candidateInclude });
-  return new Map(orders.map(o => [o.id, o]));
+  const all = [...ids];
+  const map = new Map<string, Awaited<ReturnType<typeof loadChunk>>[number]>();
+  for (let i = 0; i < all.length; i += 1000) for (const o of await loadChunk(client, all.slice(i, i + 1000))) map.set(o.id, o);
+  return map;
+}
+function loadChunk(client: Db, ids: string[]) {
+  return client.foodOrder.findMany({ where: { id: { in: ids } }, include: candidateInclude });
 }
 export type Candidate = Awaited<ReturnType<typeof loadCandidates>> extends Map<string, infer T> ? T : never;
 
@@ -114,13 +120,13 @@ export function describe(c: Classified) {
   };
 }
 
-function totals(list: Classified[]) {
+export function totals(list: Classified[]) {
   const employees = new Set<string>(); let services = 0; let cents = 0;
   for (const c of list) { if (!c.order) continue; employees.add(c.order.employeeId); services += c.order.itemCount; cents += toCents(c.order.totalAmount) ?? 0; }
   return { orders: list.length, employees: employees.size, services, amount: centsToDecimal(cents), amountCents: cents };
 }
 
-function parse<T>(schema: { parse(v: unknown): T }, raw: unknown) {
+export function parse<T>(schema: { parse(v: unknown): T }, raw: unknown) {
   try { return schema.parse(raw); }
   catch (error) {
     const issue = (error as { issues?: Array<{ message: string }> }).issues?.[0]?.message;
@@ -128,7 +134,7 @@ function parse<T>(schema: { parse(v: unknown): T }, raw: unknown) {
   }
 }
 
-function contract<T>(fn: () => T): T {
+export function contract<T>(fn: () => T): T {
   try { return fn(); }
   catch (error) {
     if (error instanceof FoodPayrollContractError) {
@@ -181,7 +187,7 @@ export async function previewFoodPayrollBatch(actor: AuthenticatedUser, raw: unk
 // ------------------------------------------------------------------ generación transaccional e idempotente
 export type CreateFoodPayrollBatchResult = { status: 200 | 201; replayed: boolean; body: Record<string, unknown> };
 
-function uniqueTarget(error: unknown) {
+export function uniqueTarget(error: unknown) {
   const e = error as { code?: string; meta?: unknown; message?: string };
   if (e?.code !== "P2002" && !/23505|unique constraint/i.test(String(e?.message ?? "")) && !/23505/.test(JSON.stringify(e?.meta ?? ""))) return null;
   return `${JSON.stringify(e.meta ?? "")} ${e.message ?? ""}`;
@@ -191,14 +197,14 @@ async function audit(client: Db, data: Prisma.FoodPayrollAuditEventUncheckedCrea
   await client.foodPayrollAuditEvent.create({ data });
 }
 
-async function auditRejected(client: PrismaClient, actorId: string, key: string, hash: string | null, orderCount: number, code: string, detail?: unknown) {
+export async function auditRejected(client: PrismaClient, actorId: string, key: string, hash: string | null, orderCount: number, code: string, detail?: unknown) {
   try {
     await audit(client, { eventType: "BATCH_REJECTED", actorId, idempotencyKey: key, requestHash: hash, orderCount, reasonCode: code.slice(0, 80),
       detail: detail === undefined ? undefined : (JSON.parse(JSON.stringify(detail)) as Prisma.InputJsonValue) });
   } catch { /* el rechazo ya se informa al cliente; el registro de auditoría es de mejor esfuerzo */ }
 }
 
-async function replayOrConflict(client: PrismaClient, actor: AuthenticatedUser, key: string, hash: string, orderCount: number): Promise<CreateFoodPayrollBatchResult | null> {
+export async function replayOrConflict(client: PrismaClient, actor: AuthenticatedUser, key: string, hash: string, orderCount: number): Promise<CreateFoodPayrollBatchResult | null> {
   const existing = await client.foodPayrollBatch.findUnique({
     where: { idempotencyKey: key },
     select: { id: true, createdById: true, idempotencyRequestHash: true, idempotencyResponse: true, status: true },
@@ -263,54 +269,8 @@ export async function createFoodPayrollBatch(
       const stale = current.filter(c => tokenFingerprint(c.fingerprint!) !== entries.get(c.orderId)!.fp || c.cls !== entries.get(c.orderId)!.cls);
       if (stale.length) throw new FoodPayrollBatchError("PREVIEW_STALE", "Los pedidos cambiaron después de la vista previa. Genera una nueva vista previa.", 409, { orderIds: stale.map(c => c.orderId) });
 
-      const batchId = randomUUID();
-      const sum = totals(current);
-      await tx.foodPayrollBatch.create({ data: {
-        id: batchId, idempotencyKey: key, idempotencyRequestHash: hash, contractVersion: FOOD_PAYROLL_CONTRACT_VERSION,
-        status: "DRAFT", payrollReference: input.payrollReference, previewDigest: digest, createdById: actor.id,
-      } });
-      const items: Prisma.FoodPayrollBatchItemCreateManyInput[] = [];
-      const services: Prisma.FoodPayrollBatchItemServiceCreateManyInput[] = [];
-      const assignments: Prisma.FoodPayrollAssignmentCreateManyInput[] = [];
-      for (const c of current) {
-        const o = c.order!; const e = o.employee!; const itemId = randomUUID();
-        items.push({
-          id: itemId, batchId, orderId: o.id, employeeId: o.employeeId,
-          employeeNumber: e.employeeNumber, employeeName: e.fullName, employeeStatusSnapshot: e.status,
-          inactiveEmployeeReviewed: c.cls === "R",
-          departmentIdSnapshot: e.department?.id ?? null, departmentCode: e.department?.code ?? null, departmentName: e.department?.name ?? null,
-          workShiftIdSnapshot: e.workShift?.id ?? null, workShiftCode: e.workShift?.code ?? null, workShiftName: e.workShift?.name ?? null,
-          menuWeekId: o.menuWeekId, serviceWeekStart: o.menuWeek!.weekStart,
-          orderStatusSnapshot: o.status, payrollStatusSnapshot: o.payrollStatus,
-          confirmedAtSnapshot: o.confirmedAt, orderCreatedAtSnapshot: o.createdAt,
-          itemCount: o.itemCount, historicalUnitPrice: centsToDecimal(toCents(o.unitPrice)!), committedAmount: centsToDecimal(toCents(o.totalAmount)!),
-          orderFingerprint: c.fingerprint!,
-        });
-        for (const r of o.reservations) {
-          services.push({ id: randomUUID(), batchId, batchItemId: itemId, reservationId: r.id, menuItemId: r.menuItemId,
-            serviceDate: r.menuItem!.menuDay.serviceDate, serviceType: r.menuItem!.serviceType, menuItemName: r.menuItem!.name });
-        }
-        assignments.push({ id: randomUUID(), orderId: o.id, batchId, batchItemId: itemId, status: "ACTIVE" });
-      }
-      await tx.foodPayrollBatchItem.createMany({ data: items });
-      await tx.foodPayrollBatchItemService.createMany({ data: services });
-      await tx.foodPayrollAssignment.createMany({ data: assignments });
-
-      const generatedAt = new Date();
-      const response = {
-        contractVersion: FOOD_PAYROLL_CONTRACT_VERSION, batchId, status: "GENERATED", payrollReference: input.payrollReference,
-        orderIds: ids, reviewedInactiveOrderIds: reviewed,
-        serviceWeeks: [...new Set(current.map(c => c.order!.menuWeek!.weekStart.toISOString().slice(0, 10)))].sort(),
-        orderCount: sum.orders, employeeCount: sum.employees, serviceCount: sum.services, committedAmount: sum.amount,
-        currency: "MXN", previewDigest: digest, generatedAt: generatedAt.toISOString(), createdById: actor.id,
-      };
-      await tx.foodPayrollBatch.update({ where: { id: batchId }, data: {
-        status: "GENERATED", generatedAt, orderCount: sum.orders, employeeCount: sum.employees, serviceCount: sum.services,
-        committedAmount: sum.amount, idempotencyResponse: response as unknown as Prisma.InputJsonValue,
-      } });
-      await audit(tx, { eventType: "BATCH_CREATED", batchId, actorId: actor.id, idempotencyKey: key, requestHash: hash, orderCount: sum.orders,
-        detail: { serviceWeeks: response.serviceWeeks, committedAmount: sum.amount, reviewedInactiveOrderIds: reviewed } as Prisma.InputJsonValue });
-      return response;
+      return persistGeneratedBatch(tx, { actor, key, hash, payrollReference: input.payrollReference, digest, included: current, reviewed,
+        response: { orderIds: ids } });
     }, { maxWait: 10_000, timeout: 60_000 });
     return { status: 201, replayed: false, body };
   } catch (error) {
@@ -327,4 +287,66 @@ export async function createFoodPayrollBatch(
     if (error instanceof FoodPayrollBatchError) await auditRejected(client, actor.id, key, hash, ids.length, error.code, error.details);
     throw error;
   }
+}
+
+// ------------------------------------------------------------------ persistencia compartida (selección explícita y masiva)
+type PersistInput = {
+  actor: AuthenticatedUser; key: string; hash: string; payrollReference: string; digest: string;
+  included: Classified[]; reviewed: readonly string[]; response?: Record<string, unknown>;
+};
+const chunks = <T,>(list: T[], size: number) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, i * size + size));
+
+/** Crea lote DRAFT, snapshots, servicios y asignaciones (por bloques) y lo pasa a GENERATED con respuesta y auditoría. */
+export async function persistGeneratedBatch(tx: Prisma.TransactionClient, p: PersistInput) {
+  const { actor, key, hash, digest, reviewed } = p;
+  const current = p.included;
+  const input = { payrollReference: p.payrollReference };
+  const batchId = randomUUID();
+  const sum = totals(current);
+  await tx.foodPayrollBatch.create({ data: {
+    id: batchId, idempotencyKey: key, idempotencyRequestHash: hash, contractVersion: FOOD_PAYROLL_CONTRACT_VERSION,
+    status: "DRAFT", payrollReference: input.payrollReference, previewDigest: digest, createdById: actor.id,
+  } });
+  const items: Prisma.FoodPayrollBatchItemCreateManyInput[] = [];
+  const services: Prisma.FoodPayrollBatchItemServiceCreateManyInput[] = [];
+  const assignments: Prisma.FoodPayrollAssignmentCreateManyInput[] = [];
+  for (const c of current) {
+    const o = c.order!; const e = o.employee!; const itemId = randomUUID();
+    items.push({
+      id: itemId, batchId, orderId: o.id, employeeId: o.employeeId,
+      employeeNumber: e.employeeNumber, employeeName: e.fullName, employeeStatusSnapshot: e.status,
+      inactiveEmployeeReviewed: c.cls === "R",
+      departmentIdSnapshot: e.department?.id ?? null, departmentCode: e.department?.code ?? null, departmentName: e.department?.name ?? null,
+      workShiftIdSnapshot: e.workShift?.id ?? null, workShiftCode: e.workShift?.code ?? null, workShiftName: e.workShift?.name ?? null,
+      menuWeekId: o.menuWeekId, serviceWeekStart: o.menuWeek!.weekStart,
+      orderStatusSnapshot: o.status, payrollStatusSnapshot: o.payrollStatus,
+      confirmedAtSnapshot: o.confirmedAt, orderCreatedAtSnapshot: o.createdAt,
+      itemCount: o.itemCount, historicalUnitPrice: centsToDecimal(toCents(o.unitPrice)!), committedAmount: centsToDecimal(toCents(o.totalAmount)!),
+      orderFingerprint: c.fingerprint!,
+    });
+    for (const r of o.reservations) {
+      services.push({ id: randomUUID(), batchId, batchItemId: itemId, reservationId: r.id, menuItemId: r.menuItemId,
+    serviceDate: r.menuItem!.menuDay.serviceDate, serviceType: r.menuItem!.serviceType, menuItemName: r.menuItem!.name });
+    }
+    assignments.push({ id: randomUUID(), orderId: o.id, batchId, batchItemId: itemId, status: "ACTIVE" });
+  }
+  for (const part of chunks(items, 500)) await tx.foodPayrollBatchItem.createMany({ data: part });
+  for (const part of chunks(services, 1000)) await tx.foodPayrollBatchItemService.createMany({ data: part });
+  for (const part of chunks(assignments, 1000)) await tx.foodPayrollAssignment.createMany({ data: part });
+
+  const generatedAt = new Date();
+  const response = {
+    contractVersion: FOOD_PAYROLL_CONTRACT_VERSION, batchId, status: "GENERATED", payrollReference: input.payrollReference,
+    ...(p.response ?? {}), reviewedInactiveOrderIds: reviewed,
+    serviceWeeks: [...new Set(current.map(c => c.order!.menuWeek!.weekStart.toISOString().slice(0, 10)))].sort(),
+    orderCount: sum.orders, employeeCount: sum.employees, serviceCount: sum.services, committedAmount: sum.amount,
+    currency: "MXN", previewDigest: digest, generatedAt: generatedAt.toISOString(), createdById: actor.id,
+  };
+  await tx.foodPayrollBatch.update({ where: { id: batchId }, data: {
+    status: "GENERATED", generatedAt, orderCount: sum.orders, employeeCount: sum.employees, serviceCount: sum.services,
+    committedAmount: sum.amount, idempotencyResponse: response as unknown as Prisma.InputJsonValue,
+  } });
+  await audit(tx, { eventType: "BATCH_CREATED", batchId, actorId: actor.id, idempotencyKey: key, requestHash: hash, orderCount: sum.orders,
+    detail: { serviceWeeks: response.serviceWeeks, committedAmount: sum.amount, reviewedInactiveOrderIds: reviewed } as Prisma.InputJsonValue });
+  return response;
 }

@@ -59,8 +59,10 @@ export const candidateFiltersSchema = z.object({
   employee: z.string().trim().max(120).optional(),
   view: z.enum(["selectable", "all"]).default("selectable"),
   limit: z.coerce.number().int().min(1).max(500).default(300),
+  page: z.coerce.number().int().min(1).default(1),
 });
 
+/** Consulta individual opcional, paginada con total exacto: ninguna página omite pedidos en silencio. */
 export async function listFoodPayrollCandidates(actor: AuthenticatedUser, raw: unknown, deps: Deps = {}) {
   const client = deps.db ?? defaultDb;
   await requireCapability(actor, "create", client);
@@ -75,9 +77,11 @@ export async function listFoodPayrollCandidates(actor: AuthenticatedUser, raw: u
       { employeeNumber: { contains: f.employee, mode: "insensitive" } }, { fullName: { contains: f.employee, mode: "insensitive" } },
     ] } } : {}),
   };
+  const total = await client.foodOrder.count({ where });
+  const pages = Math.max(1, Math.ceil(total / f.limit));
   const orders = await client.foodOrder.findMany({
     where, include: { ...candidateInclude, payrollAssignments: { where: { status: "ACTIVE" }, select: { status: true, batch: { select: { id: true, payrollReference: true, status: true } } } } },
-    orderBy: [{ menuWeek: { weekStart: "desc" } }, { employee: { fullName: "asc" } }], take: f.limit,
+    orderBy: [{ menuWeek: { weekStart: "desc" } }, { employee: { fullName: "asc" } }, { id: "asc" }], take: f.limit, skip: (f.page - 1) * f.limit,
   });
   const rows = orders.map(o => {
     const c = classify(o, o.id, "busqueda");
@@ -85,7 +89,7 @@ export async function listFoodPayrollCandidates(actor: AuthenticatedUser, raw: u
     return { ...describe(c), classification: c.cls === "E" ? "eligible" : c.cls === "R" ? "requiresReview" : "excluded",
       activeBatch: active ? { id: active.id, payrollReference: active.payrollReference, status: active.status } : null };
   });
-  return { filters: f, count: rows.length, truncated: rows.length === f.limit, orders: rows };
+  return { filters: f, count: rows.length, total, page: f.page, pages, truncated: f.page < pages, orders: rows };
 }
 
 // ------------------------------------------------------------------ consulta histórica
@@ -127,12 +131,16 @@ export async function listFoodPayrollBatches(actor: AuthenticatedUser, raw: unkn
   return { batches: batches.map(b => summary(b, weeks.get(b.id))) };
 }
 
-export async function getFoodPayrollBatch(actor: AuthenticatedUser, batchId: string, deps: Deps = {}) {
+export const DETAIL_PAGE_SIZE = 200;
+
+/** Detalle paginado (200 renglones por página) con total exacto; la exportación oficial siempre incluye todo. */
+export async function getFoodPayrollBatch(actor: AuthenticatedUser, batchId: string, deps: Deps = {}, pageRaw: unknown = 1) {
   const client = deps.db ?? defaultDb;
   await requireCapability(actor, "view", client);
+  const page = Math.max(1, Math.trunc(Number(pageRaw) || 1));
   const b = await client.foodPayrollBatch.findFirst({ where: { id: batchId, status: { not: "DRAFT" } }, select: {
     ...batchSummarySelect,
-    items: { orderBy: [{ serviceWeekStart: "asc" }, { employeeNumber: "asc" }], select: {
+    items: { orderBy: [{ employeeNumber: "asc" }, { serviceWeekStart: "asc" }, { id: "asc" }], take: DETAIL_PAGE_SIZE, skip: (page - 1) * DETAIL_PAGE_SIZE, select: {
       id: true, orderId: true, employeeNumber: true, employeeName: true, employeeStatusSnapshot: true, inactiveEmployeeReviewed: true,
       departmentName: true, workShiftName: true, serviceWeekStart: true, itemCount: true, historicalUnitPrice: true, committedAmount: true,
       services: { orderBy: { serviceDate: "asc" }, select: { serviceDate: true, serviceType: true, menuItemName: true } },
@@ -141,9 +149,10 @@ export async function getFoodPayrollBatch(actor: AuthenticatedUser, batchId: str
     auditEvents: { orderBy: { createdAt: "asc" }, select: { eventType: true, createdAt: true, orderCount: true, reasonCode: true, actor: { select: { name: true } } } },
   } });
   if (!b) throw new FoodPayrollBatchError("BATCH_NOT_FOUND", "Lote de prenómina no encontrado.", 404);
-  const weeks = [...new Set(b.items.map(i => i.serviceWeekStart.toISOString().slice(0, 10)))].sort();
+  const weeks = (await weeksByBatch(client, [b.id])).get(b.id) ?? [];
+  const itemsTotal = await client.foodPayrollBatchItem.count({ where: { batchId } });
   return {
-    ...summary(b, weeks),
+    ...summary(b, weeks), itemsTotal, page, pageSize: DETAIL_PAGE_SIZE, pages: Math.max(1, Math.ceil(itemsTotal / DETAIL_PAGE_SIZE)),
     items: b.items.map(i => ({ ...i, serviceWeekStart: i.serviceWeekStart.toISOString().slice(0, 10),
       historicalUnitPrice: centsToDecimal(toCents(i.historicalUnitPrice) ?? 0), committedAmount: centsToDecimal(toCents(i.committedAmount) ?? 0),
       services: i.services.map(s => ({ ...s, serviceDate: s.serviceDate.toISOString().slice(0, 10) })),
@@ -218,6 +227,34 @@ export async function buildOfficialPayrollWorkbook(batch: ExportBatch, exportedA
     row.eachCell(cell => { cell.font = { bold: true, color: { argb: "FFFFFFFF" } }; cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: blue } }; });
     ws.views = [{ state: "frozen", ySplit: 1 }];
   };
+  // Hoja principal para nómina: un renglón por número de empleado con el descuento total agrupado.
+  const grouped = new Map<string, { name: string; status: string; reviewed: boolean; dept: string; shift: string; orders: number; services: number; cents: number; weeks: Set<string> }>();
+  for (const i of batch.items) {
+    const g = grouped.get(i.employeeNumber) ?? { name: i.employeeName, status: i.employeeStatusSnapshot, reviewed: false, dept: i.departmentName ?? "", shift: i.workShiftName ?? "", orders: 0, services: 0, cents: 0, weeks: new Set<string>() };
+    g.orders += 1; g.services += i.itemCount; g.cents += toCents(i.committedAmount) ?? 0; g.weeks.add(ymd(i.serviceWeekStart));
+    g.reviewed = g.reviewed || i.inactiveEmployeeReviewed;
+    grouped.set(i.employeeNumber, g);
+  }
+  const ge = wb.addWorksheet("Descuentos por colaborador");
+  ge.columns = [
+    { header: "Referencia de prenómina", key: "ref", width: 24 }, { header: "No. colaborador", key: "num", width: 16 },
+    { header: "Colaborador", key: "name", width: 32 }, { header: "Estado del colaborador", key: "status", width: 18 },
+    { header: "Revisado por RH (excolaborador)", key: "rev", width: 18 }, { header: "Departamento", key: "dept", width: 22 },
+    { header: "Turno", key: "shift", width: 14 }, { header: "Pedidos", key: "orders", width: 10 }, { header: "Servicios", key: "qty", width: 10 },
+    { header: "Semanas de servicio", key: "weeks", width: 34 }, { header: "Descuento total", key: "amount", width: 16 },
+  ];
+  let groupedCents = 0;
+  for (const [num, g] of [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b, "es"))) {
+    groupedCents += g.cents;
+    ge.addRow({ ref: batch.payrollReference, num, name: g.name, status: g.status, rev: g.reviewed ? "Sí" : "No", dept: g.dept, shift: g.shift,
+      orders: g.orders, qty: g.services, weeks: [...g.weeks].sort().join(", "), amount: g.cents / 100 });
+  }
+  if (groupedCents !== (toCents(batch.committedAmount) ?? -1)) throw new Error("El agrupado por colaborador no cuadra con el total del lote");
+  const gt = ge.addRow({ name: `TOTAL (${grouped.size} colaboradores)`, orders: batch.orderCount, qty: batch.serviceCount, amount: money(batch.committedAmount) });
+  gt.font = { bold: true }; gt.eachCell(c => { c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: gold } }; });
+  ge.getColumn("amount").numFmt = "#,##0.00";
+  head(ge);
+
   const ws = wb.addWorksheet("Prenomina");
   ws.columns = [
     { header: "Referencia de prenómina", key: "ref", width: 24 }, { header: "Lote", key: "batch", width: 38 },
@@ -255,7 +292,7 @@ export async function buildOfficialPayrollWorkbook(batch: ExportBatch, exportedA
     ["Lote", batch.id], ["Referencia de prenómina", batch.payrollReference], ["Referencia externa", externalReference ?? ""],
     ["Generado", batch.generatedAt ? batch.generatedAt.toISOString() : ""], ["Generado por", batch.createdBy.name],
     ["Exportado", exportedAt.toISOString()], ["Exportado por", exportedBy],
-    ["Pedidos", batch.orderCount], ["Colaboradores", batch.employeeCount], ["Servicios", batch.serviceCount],
+    ["Pedidos", batch.orderCount], ["Colaboradores", batch.employeeCount], ["Renglones en 'Descuentos por colaborador'", grouped.size], ["Servicios", batch.serviceCount],
     ["Importe total (MXN)", centsToDecimal(toCents(batch.committedAmount) ?? 0)],
     ["Semanas de servicio", [...new Set(batch.items.map(i => ymd(i.serviceWeekStart)))].sort().join(", ")],
     ["Aviso", "Exportación oficial para RH. Exportar no significa que el descuento haya sido aplicado; la aplicación se confirma en la conciliación."],

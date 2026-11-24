@@ -15,6 +15,8 @@ function services(h) {
   const hit = name => async () => { h.calls.services++; h.calls.writes.push(name); return name === 'createFoodPayrollBatch' ? { status: 201, replayed: false, body: { batchId: 'b1' } }
     : name === 'downloadFoodPayrollExport' ? { fileName: 'Prenomina_x.xlsx', fileSha256: 'a'.repeat(64), body: Buffer.from('xlsx') } : { ok: true }; };
   h.mocks['@/lib/food-services/payroll-batch-service'] = { previewFoodPayrollBatch: hit('previewFoodPayrollBatch'), createFoodPayrollBatch: hit('createFoodPayrollBatch') };
+  h.mocks['@/lib/food-services/payroll-batch-mass'] = { previewFoodPayrollPeriod: hit('previewFoodPayrollPeriod'),
+    createFoodPayrollPeriodBatch: async () => { h.calls.services++; h.calls.writes.push('createFoodPayrollPeriodBatch'); return { status: 201, replayed: false, body: { batchId: 'b2' } }; } };
   h.mocks['@/lib/food-services/payroll-batch-operations'] = Object.fromEntries(['getPayrollCapabilities', 'listFoodPayrollCandidates', 'listFoodPayrollBatches',
     'getFoodPayrollBatch', 'voidFoodPayrollBatch', 'exportFoodPayrollBatch', 'downloadFoodPayrollExport'].map(n => [n, hit(n)]));
 }
@@ -24,6 +26,8 @@ const cases = [
   { file: `${B}/preview/route.ts`, method: 'POST', action: 'create-payroll-batch', service: 'previewFoodPayrollBatch', status: 200 },
   { file: `${B}/batches/route.ts`, method: 'POST', action: 'create-payroll-batch', service: 'createFoodPayrollBatch', status: 201 },
   { file: `${B}/batches/route.ts`, method: 'GET', action: 'view-payroll-batches', service: 'listFoodPayrollBatches', status: 200 },
+  { file: `${B}/period/preview/route.ts`, method: 'POST', action: 'create-payroll-batch', service: 'previewFoodPayrollPeriod', status: 200 },
+  { file: `${B}/period/batches/route.ts`, method: 'POST', action: 'create-payroll-batch', service: 'createFoodPayrollPeriodBatch', status: 201 },
   { file: `${B}/batches/[id]/route.ts`, method: 'GET', action: 'view-payroll-batches', service: 'getFoodPayrollBatch', status: 200 },
   { file: `${B}/batches/[id]/void/route.ts`, method: 'POST', action: 'void-payroll-batch', service: 'voidFoodPayrollBatch', status: 200 },
   { file: `${B}/batches/[id]/export/route.ts`, method: 'POST', action: 'export-payroll-batch', service: 'exportFoodPayrollBatch', status: 200 },

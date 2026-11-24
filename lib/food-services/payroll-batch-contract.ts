@@ -119,7 +119,33 @@ export type PreviewClass = "E" | "R"; // E elegible, R requiere revisión expres
 export type PreviewTokenPayload = {
   v: number; a: string; r: string; iat: number; exp: number; d: string;
   e: Array<[string, string, PreviewClass]>;
+  /** Modo masivo por periodo (Bloque C): el token no enumera pedidos; fija periodo, digest y excepciones. */
+  m?: "P"; p?: { from: string; to: string }; n?: { eligible: number; review: number }; rv?: string[];
 };
+
+const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida (AAAA-MM-DD).");
+
+/** Prenómina masiva: todos los pedidos confirmados de las semanas de servicio del periodo, sin límite de cantidad. */
+export const periodPreviewSchema = z.object({
+  payrollReference: payrollReferenceSchema, weekFrom: isoDay, weekTo: isoDay,
+}).strict().refine(v => v.weekFrom <= v.weekTo, "La semana inicial debe ser anterior o igual a la final.");
+
+export const periodCreateSchema = z.object({
+  payrollReference: payrollReferenceSchema, weekFrom: isoDay, weekTo: isoDay,
+  reviewedInactiveOrderIds: z.array(z.string().trim().min(1).max(100)).max(FOOD_PAYROLL_MAX_ORDERS).default([]),
+  previewToken: z.string().min(20).max(200_000),
+}).strict();
+
+/** Huella de idempotencia del modo masivo: actor, versión, periodo, referencia, digest y excolaboradores revisados. */
+export function periodRequestHash(input: {
+  actorId: string; payrollReference: string; weekFrom: string; weekTo: string; reviewedInactiveOrderIds: readonly string[]; selectionDigest: string;
+}) {
+  return sha256Hex(canonicalJson({
+    mode: "PERIOD", actorId: input.actorId, contractVersion: FOOD_PAYROLL_CONTRACT_VERSION,
+    period: { from: input.weekFrom, to: input.weekTo }, payrollReference: input.payrollReference,
+    reviewedInactiveOrderIds: [...input.reviewedInactiveOrderIds].sort(), selectionDigest: input.selectionDigest,
+  }));
+}
 
 function previewSecret(secret = process.env.FOOD_PAYROLL_PREVIEW_SECRET) {
   if (!secret || secret.length < 32) {

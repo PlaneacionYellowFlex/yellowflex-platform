@@ -135,7 +135,10 @@ test('prenómina Bloque B: permisos, selección, historial, anulación, exportac
     assert.equal(createHash('sha256').update(stored.fileContent).digest('hex'), ex.fileSha256);
     assert.equal(stored.exportedById, rh.id); assert.equal(stored.externalReference, 'QA envío 1');
     const wb = new ExcelJS.Workbook(); await wb.xlsx.load(stored.fileContent);
-    assert.deepEqual(wb.worksheets.map(s => s.name), ['Prenomina', 'Servicios', 'Control']);
+    assert.deepEqual(wb.worksheets.map(s => s.name), ['Descuentos por colaborador', 'Prenomina', 'Servicios', 'Control']);
+    const grouped = wb.getWorksheet('Descuentos por colaborador');
+    assert.equal(grouped.rowCount, 1 + 3 + 1, 'un renglón por número de empleado más total');
+    assert.equal(grouped.getRow(5).getCell(11).value, 246.5);
     assert.equal(wb.getWorksheet('Prenomina').rowCount, 1 + 3 + 1);
     assert.equal(wb.getWorksheet('Servicios').rowCount, 1 + 6);
     const totalRow = wb.getWorksheet('Prenomina').getRow(5);

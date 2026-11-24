@@ -20,13 +20,20 @@ type Batch = {
   voidedAt: string | null; voidReason: string | null; serviceWeeks: string[];
   createdBy: { name: string }; exportedBy: { name: string } | null; voidedBy: { name: string } | null;
 };
-type Detail = Batch & {
+type Detail = Batch & { itemsTotal: number; page: number; pages: number;
   items: Array<{ id: string; orderId: string; employeeNumber: string; employeeName: string; employeeStatusSnapshot: string; inactiveEmployeeReviewed: boolean;
     departmentName: string | null; serviceWeekStart: string; itemCount: number; historicalUnitPrice: string; committedAmount: string; assignmentStatus: string | null;
     services: Array<{ serviceDate: string; serviceType: string; menuItemName: string }> }>;
   auditEvents: Array<{ eventType: string; createdAt: string; orderCount: number; reasonCode: string | null; actor: { name: string } }>;
 };
 type ApiError = Error & { code?: string };
+type EmployeeRow = { employeeNumber: string; employeeName: string; employeeStatus: string; orders: number; services: number; amount: string; serviceWeeks: string[] };
+type MassPreview = {
+  payrollReference: string; period: { weekFrom: string; weekTo: string }; expiresAt: string; previewDigest: string; previewToken: string;
+  confirmedOrdersInPeriod: number; serviceWeeks: string[]; actor: { name: string }; elapsedMs: number;
+  totals: { eligible: Totals; requiresReview: Totals }; employees: EmployeeRow[]; requiresReview: Row[];
+  excludedSummary: Record<string, number>; excludedRoutine: number; excludedAttention: Row[];
+};
 
 const REASONS: Record<string, string> = {
   ORDER_NOT_FOUND: "Pedido inexistente", ORDER_CANCELLED: "Pedido cancelado", ORDER_NOT_CONFIRMED: "Pedido no confirmado",
@@ -87,6 +94,15 @@ export default function HrPayrollBatches() {
   const [idemKey, setIdemKey] = useState("");
   const [now, setNow] = useState(() => Date.now());
 
+  // prenómina masiva del periodo
+  const [period, setPeriod] = useState({ weekFrom: "", weekTo: "", reference: "" });
+  const [mass, setMass] = useState<MassPreview | null>(null);
+  const [massReviewed, setMassReviewed] = useState<Set<string>>(new Set());
+  const [massKey, setMassKey] = useState("");
+  const [empFilter, setEmpFilter] = useState("");
+  const [empPage, setEmpPage] = useState(1);
+  const [candMeta, setCandMeta] = useState({ total: 0, page: 1, pages: 1 });
+
   // historial
   const [batches, setBatches] = useState<Batch[]>([]);
   const [historyFilter, setHistoryFilter] = useState({ status: "", reference: "" });
@@ -120,18 +136,48 @@ export default function HrPayrollBatches() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => { if (!preview) return; const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, [preview]);
+  useEffect(() => { if (!preview && !mass) return; const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, [preview, mass]);
   const secondsLeft = preview ? Math.max(0, Math.floor((Date.parse(preview.expiresAt) - now) / 1000)) : 0;
+  const massSecondsLeft = mass ? Math.max(0, Math.floor((Date.parse(mass.expiresAt) - now) / 1000)) : 0;
+  const EMP_PAGE = 50;
+  const massEmployees = useMemo(() => {
+    const q = empFilter.trim().toLowerCase();
+    return (mass?.employees ?? []).filter(e => !q || e.employeeNumber.toLowerCase().includes(q) || e.employeeName.toLowerCase().includes(q));
+  }, [mass, empFilter]);
+  const empPages = Math.max(1, Math.ceil(massEmployees.length / EMP_PAGE));
+
+  const doMassPreview = () => run("mass-preview", async () => {
+    const data = await call<MassPreview>("/api/food-services/hr/payroll/period/preview", { method: "POST",
+      body: JSON.stringify({ payrollReference: period.reference, weekFrom: period.weekFrom, weekTo: period.weekTo }) });
+    setMass(data); setMassReviewed(new Set()); setMassKey(newKey()); setEmpFilter(""); setEmpPage(1); setNow(Date.now());
+  });
+
+  const confirmMass = () => run("mass-create", async () => {
+    if (!mass) return;
+    try {
+      const data = await call<{ batchId: string; orderCount: number; employeeCount: number; serviceCount: number; committedAmount: string; replayed: boolean }>(
+        "/api/food-services/hr/payroll/period/batches", { method: "POST", headers: { "Idempotency-Key": massKey },
+          body: JSON.stringify({ payrollReference: mass.payrollReference, weekFrom: mass.period.weekFrom, weekTo: mass.period.weekTo,
+            reviewedInactiveOrderIds: [...massReviewed], previewToken: mass.previewToken }) });
+      setSuccess(`${data.replayed ? "Lote ya registrado (reintento seguro)" : "Prenómina masiva generada"}: ${data.employeeCount} colaboradores, ${data.orderCount} pedidos, ${data.serviceCount} servicios, ${mxn(data.committedAmount)}. Folio ${data.batchId.slice(0, 8)}.`);
+      setMass(null);
+      if (caps?.view) await loadHistory();
+    } catch (e) {
+      const code = (e as ApiError).code;
+      if (code === "PREVIEW_STALE" || code === "PREVIEW_EXPIRED") { setMass(null); throw new Error(`${(e as Error).message}`); }
+      throw e;
+    }
+  });
 
   const selectable = useMemo(() => (candidates ?? []).filter(c => c.classification !== "excluded"), [candidates]);
   const selectedRows = useMemo(() => selectable.filter(c => selected.has(c.orderId)), [selectable, selected]);
   const selectedTotal = selectedRows.reduce((s, c) => s + Math.round(Number(c.committedAmount ?? 0) * 100), 0) / 100;
 
-  const search = () => run("search", async () => {
-    const q = new URLSearchParams(Object.entries(filters).filter(([, v]) => v)).toString();
-    const data = await call<{ orders: Candidate[]; truncated: boolean }>(`/api/food-services/hr/payroll/candidates?${q}`);
-    setCandidates(data.orders); setSelected(new Set()); setPreview(null);
-    if (data.truncated) setSuccess("Se muestran los primeros resultados; acota los filtros para ver el resto.");
+  const search = (page = 1) => run("search", async () => {
+    const q = new URLSearchParams([...Object.entries(filters).filter(([, v]) => v), ["page", String(page)]]).toString();
+    const data = await call<{ orders: Candidate[]; total: number; page: number; pages: number }>(`/api/food-services/hr/payroll/candidates?${q}`);
+    setCandidates(data.orders); setCandMeta({ total: data.total, page: data.page, pages: data.pages }); setPreview(null);
+    if (page === 1) setSelected(new Set());
   });
 
   const doPreview = () => run("preview", async () => {
@@ -162,7 +208,7 @@ export default function HrPayrollBatches() {
     }
   });
 
-  const openDetail = (b: Batch) => run(`detail:${b.id}`, async () => setDetail(await call<Detail>(`/api/food-services/hr/payroll/batches/${b.id}`)));
+  const openDetail = (b: Batch | Detail, page = 1) => run(`detail:${b.id}`, async () => setDetail(await call<Detail>(`/api/food-services/hr/payroll/batches/${b.id}?page=${page}`)));
 
   const doVoid = () => run("void", async () => {
     if (!voidTarget) return;
@@ -206,9 +252,62 @@ export default function HrPayrollBatches() {
       {success && <p role="status" className="mt-4 flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900"><CheckCircle2 className="mt-0.5 size-4 shrink-0" />{success}</p>}
     </section>
 
+    {caps.create && <section className="rounded-2xl border border-slate-200 border-l-4 border-l-[#0B3A82] bg-white p-5 sm:p-7">
+      <h3 className="text-lg font-black text-[#0B3A82]">Prenómina masiva del periodo</h3>
+      <p className="mt-1 text-sm text-slate-600">Incluye a <strong>todos los colaboradores</strong> con pedidos confirmados en las semanas de servicio del periodo, sin límite de cantidad. Solo se revisan individualmente las excepciones.</p>
+      <form className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" onSubmit={e => { e.preventDefault(); void doMassPreview(); }}>
+        <label className="text-sm font-semibold text-slate-700">Semana desde<input type="date" required className={input} value={period.weekFrom} onChange={e => setPeriod({ ...period, weekFrom: e.target.value })} /></label>
+        <label className="text-sm font-semibold text-slate-700">Semana hasta<input type="date" required className={input} value={period.weekTo} onChange={e => setPeriod({ ...period, weekTo: e.target.value })} /></label>
+        <label className="text-sm font-semibold text-slate-700">Referencia de prenómina<input required maxLength={40} className={input} placeholder="Ej. Quincena 2 noviembre" value={period.reference} onChange={e => setPeriod({ ...period, reference: e.target.value })} /></label>
+        <div className="flex items-end"><button type="submit" className={`${gold} w-full`} disabled={busy !== null || !period.weekFrom || !period.weekTo || !period.reference.trim()}>
+          {busy === "mass-preview" ? <><Loader2 className="size-4 animate-spin" />Calculando…</> : <><Eye className="size-4" />Calcular prenómina</>}</button></div>
+      </form>
+
+      {mass && <div className="mt-6 rounded-2xl border-2 border-[#F4B400] p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div><p className="text-base font-black text-[#0B3A82]">{mass.payrollReference} · {dateMx(mass.period.weekFrom)} a {dateMx(mass.period.weekTo)}</p>
+            <p className="text-xs text-slate-500">{mass.confirmedOrdersInPeriod} pedidos confirmados en el periodo · semanas {mass.serviceWeeks.map(dateMx).join(", ") || "—"} · calculado en {(mass.elapsedMs / 1000).toFixed(1)} s · digest {mass.previewDigest.slice(0, 12)}…</p></div>
+          <p className={`rounded-full px-3 py-1 text-xs font-bold ${massSecondsLeft > 60 ? "bg-[#0B3A82]/5 text-[#0B3A82]" : "bg-red-50 text-red-700"}`}>{massSecondsLeft > 0 ? `Vence en ${Math.floor(massSecondsLeft / 60)}:${String(massSecondsLeft % 60).padStart(2, "0")}` : "Vista previa vencida"}</p>
+        </div>
+        <dl className="mt-4 grid gap-3 sm:grid-cols-4">{[["Colaboradores únicos", mass.totals.eligible.employees], ["Pedidos", mass.totals.eligible.orders], ["Servicios", mass.totals.eligible.services], ["Importe total", mxn(mass.totals.eligible.amount)]].map(([k, v]) =>
+          <div key={String(k)} className="rounded-xl border border-slate-200 p-3"><dt className="text-xs font-semibold uppercase text-slate-500">{k}</dt><dd className="text-xl font-black text-[#0B3A82]">{v}</dd></div>)}</dl>
+        {mass.requiresReview.length > 0 && <div className="mt-4 rounded-xl border border-[#D6A800] bg-[#F4B400]/10 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2"><p className="flex items-center gap-2 text-sm font-bold text-[#7a5a00]"><AlertTriangle className="size-4" />Excepciones: {mass.requiresReview.length} pedido(s) de excolaboradores. Marca los que RH revisó para incluirlos.</p>
+            <button type="button" className={outline} disabled={busy !== null} onClick={() => { setMassReviewed(new Set(mass.requiresReview.map(r => r.orderId))); setMassKey(newKey()); }}>Marcar todos como revisados</button></div>
+          <ul className="mt-2 max-h-48 space-y-1 overflow-auto text-sm">{mass.requiresReview.map(r => <li key={r.orderId}><label className="flex items-center gap-2">
+            <input type="checkbox" className="size-4 accent-[#0B3A82]" checked={massReviewed.has(r.orderId)} disabled={busy !== null}
+              onChange={e => { const s = new Set(massReviewed); if (e.target.checked) s.add(r.orderId); else s.delete(r.orderId); setMassReviewed(s); setMassKey(newKey()); }} />
+            {r.employeeName} ({r.employeeNumber}) · semana {dateMx(r.serviceWeekStart)} · {mxn(r.committedAmount)}</label></li>)}</ul></div>}
+        {(mass.excludedAttention.length > 0 || mass.excludedRoutine > 0) && <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
+          <p className="font-bold text-slate-700">Fuera de este lote: {mass.excludedRoutine} ya procesados o asignados{mass.excludedAttention.length ? ` · ${mass.excludedAttention.length} requieren atención` : ""}</p>
+          <p className="mt-1 text-xs text-slate-500">{Object.entries(mass.excludedSummary).map(([k, v]) => `${REASONS[k] ?? k}: ${v}`).join(" · ")}</p>
+          {mass.excludedAttention.length > 0 && <ul className="mt-2 max-h-40 space-y-1 overflow-auto text-slate-600">{mass.excludedAttention.map(r => <li key={r.orderId}>{r.employeeName ?? r.orderId} ({r.employeeNumber}) · {r.reasons.map(x => REASONS[x] ?? x).join(" · ")}</li>)}</ul>}
+        </div>}
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-bold text-[#0B3A82]">Descuento por colaborador ({massEmployees.length})</p>
+          <input className="w-64 rounded-xl border border-slate-300 px-3 py-1.5 text-sm" placeholder="Filtrar por número o nombre (consulta)" value={empFilter} onChange={e => { setEmpFilter(e.target.value); setEmpPage(1); }} />
+        </div>
+        <div className="mt-2 overflow-auto rounded-xl border border-slate-200"><table className="w-full min-w-[720px] text-left text-sm">
+          <thead className="bg-[#0B3A82] text-white"><tr><th className="p-2">No.</th><th className="p-2">Colaborador</th><th className="p-2 text-right">Pedidos</th><th className="p-2 text-right">Servicios</th><th className="p-2">Semanas</th><th className="p-2 text-right">Descuento</th></tr></thead>
+          <tbody className="divide-y divide-slate-100">{massEmployees.slice((empPage - 1) * EMP_PAGE, empPage * EMP_PAGE).map(e => <tr key={e.employeeNumber}>
+            <td className="p-2 font-mono text-xs">{e.employeeNumber}</td><td className="p-2">{e.employeeName}</td><td className="p-2 text-right">{e.orders}</td>
+            <td className="p-2 text-right">{e.services}</td><td className="p-2 text-xs">{e.serviceWeeks.map(dateMx).join(", ")}</td><td className="p-2 text-right font-semibold">{mxn(e.amount)}</td></tr>)}</tbody></table></div>
+        <div className="mt-2 flex items-center justify-end gap-2 text-sm text-slate-600">
+          <button type="button" className={outline} disabled={empPage <= 1} onClick={() => setEmpPage(empPage - 1)}>Anterior</button>
+          <span>Página {empPage} de {empPages}</span>
+          <button type="button" className={outline} disabled={empPage >= empPages} onClick={() => setEmpPage(empPage + 1)}>Siguiente</button></div>
+        <div className="mt-5 flex flex-wrap justify-end gap-3">
+          <button type="button" className={outline} disabled={busy !== null} onClick={() => setMass(null)}>Cancelar</button>
+          <button type="button" className={primary} disabled={busy !== null || massSecondsLeft === 0 || mass.totals.eligible.orders + massReviewed.size === 0} onClick={() => void confirmMass()}>
+            {busy === "mass-create" ? <><Loader2 className="size-4 animate-spin" />Generando prenómina…</> : <><CheckCircle2 className="size-4" />Generar prenómina de {mass.totals.eligible.employees} colaboradores ({mass.totals.eligible.orders + massReviewed.size} pedidos)</>}</button>
+        </div>
+      </div>}
+    </section>}
+
     {caps.create && <section className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-7">
-      <h3 className="text-lg font-black text-[#0B3A82]">1. Seleccionar pedidos</h3>
-      <form className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5" onSubmit={e => { e.preventDefault(); void search(); }}>
+      <h3 className="text-lg font-black text-[#0B3A82]">Consulta y selección individual (opcional)</h3>
+      <p className="mt-1 text-sm text-slate-600">Herramienta de consulta por colaborador o semana y para lotes de casos puntuales. Resultados paginados con total exacto.</p>
+      <form className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5" onSubmit={e => { e.preventDefault(); void search(1); }}>
         <label className="text-sm font-semibold text-slate-700">Semana desde<input type="date" className={input} value={filters.weekFrom} onChange={e => setFilters({ ...filters, weekFrom: e.target.value })} /></label>
         <label className="text-sm font-semibold text-slate-700">Semana hasta<input type="date" className={input} value={filters.weekTo} onChange={e => setFilters({ ...filters, weekTo: e.target.value })} /></label>
         <label className="text-sm font-semibold text-slate-700">Colaborador<input className={input} placeholder="Número o nombre" maxLength={120} value={filters.employee} onChange={e => setFilters({ ...filters, employee: e.target.value })} /></label>
@@ -219,7 +318,7 @@ export default function HrPayrollBatches() {
 
       {candidates && <div className="mt-5">
         <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-          <p className="text-slate-600">{candidates.length} pedido(s) · {selectable.length} seleccionables · <strong className="text-[#0B3A82]">{selectedRows.length} seleccionados · {mxn(String(selectedTotal))}</strong></p>
+          <p className="text-slate-600">{candMeta.total} pedido(s) en total · página {candMeta.page} de {candMeta.pages} · {selectable.length} seleccionables en esta página · <strong className="text-[#0B3A82]">{selectedRows.length} seleccionados · {mxn(String(selectedTotal))}</strong></p>
           <div className="flex gap-2">
             <button type="button" className={outline} disabled={busy !== null} onClick={() => setSelected(new Set(selectable.filter(c => c.classification === "eligible").map(c => c.orderId)))}>Seleccionar elegibles</button>
             <button type="button" className={outline} disabled={busy !== null} onClick={() => setSelected(new Set())}>Limpiar</button>
@@ -242,6 +341,10 @@ export default function HrPayrollBatches() {
             </tr>)}</tbody>
           </table>
         </div>
+        {candMeta.pages > 1 && <div className="mt-2 flex items-center justify-end gap-2 text-sm text-slate-600">
+          <button type="button" className={outline} disabled={busy !== null || candMeta.page <= 1} onClick={() => void search(candMeta.page - 1)}>Anterior</button>
+          <span>Página {candMeta.page} de {candMeta.pages} (la selección se conserva entre páginas)</span>
+          <button type="button" className={outline} disabled={busy !== null || candMeta.page >= candMeta.pages} onClick={() => void search(candMeta.page + 1)}>Siguiente</button></div>}
         <div className="mt-4 flex flex-wrap items-end gap-3">
           <label className="min-w-64 flex-1 text-sm font-semibold text-slate-700">Referencia de prenómina (libre, definida por RH)
             <input className={input} maxLength={40} placeholder="Ej. Quincena 2 noviembre, NOM-45, Pago extraordinario" value={reference} onChange={e => setReference(e.target.value)} /></label>
@@ -253,7 +356,7 @@ export default function HrPayrollBatches() {
 
     {preview && <section className="rounded-2xl border-2 border-[#F4B400] bg-white p-5 sm:p-7" aria-labelledby="pv-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h3 id="pv-title" className="text-lg font-black text-[#0B3A82]">2. Vista previa · {preview.payrollReference}</h3>
+        <div><h3 id="pv-title" className="text-lg font-black text-[#0B3A82]">Vista previa de la selección individual · {preview.payrollReference}</h3>
           <p className="text-sm text-slate-600">Semanas: {preview.serviceWeeks.map(dateMx).join(", ") || "—"} · Preparada por {preview.actor.name} · Digest {preview.previewDigest.slice(0, 12)}…</p></div>
         <p className={`rounded-full px-3 py-1 text-xs font-bold ${secondsLeft > 60 ? "bg-[#0B3A82]/5 text-[#0B3A82]" : "bg-red-50 text-red-700"}`}>{secondsLeft > 0 ? `Vence en ${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, "0")}` : "Vista previa vencida"}</p>
       </div>
@@ -320,7 +423,8 @@ export default function HrPayrollBatches() {
     </Modal>}
 
     {detail && <Modal title={`Lote ${detail.payrollReference}`} wide onClose={() => setDetail(null)}>
-      <p className="text-sm text-slate-600">{STATUS[detail.status]?.label ?? detail.status} · {detail.orderCount} pedidos · {mxn(detail.committedAmount)} · Folio {detail.id}</p>
+      <p className="text-sm text-slate-600">{STATUS[detail.status]?.label ?? detail.status} · {detail.employeeCount} colaboradores · {detail.orderCount} pedidos · {mxn(detail.committedAmount)} · Folio {detail.id}</p>
+      <p className="mt-1 text-xs text-slate-500">Renglones {(detail.page - 1) * 200 + 1}–{Math.min(detail.page * 200, detail.itemsTotal)} de {detail.itemsTotal}. El Excel oficial incluye todos los renglones.</p>
       <div className="mt-3 max-h-80 overflow-auto rounded-xl border border-slate-200"><table className="w-full min-w-[760px] text-left text-xs">
         <thead className="sticky top-0 bg-[#0B3A82] text-white"><tr><th className="p-2">Colaborador</th><th className="p-2">Semana</th><th className="p-2">Servicios</th><th className="p-2 text-right">Precio</th><th className="p-2 text-right">Importe</th><th className="p-2">Asignación</th></tr></thead>
         <tbody className="divide-y divide-slate-100">{detail.items.map(i => <tr key={i.id}>
@@ -328,6 +432,10 @@ export default function HrPayrollBatches() {
           <td className="p-2">{dateMx(i.serviceWeekStart)}</td><td className="p-2">{i.services.map(s => `${dateMx(s.serviceDate)} ${s.menuItemName}`).join(" · ")}</td>
           <td className="p-2 text-right">{mxn(i.historicalUnitPrice)}</td><td className="p-2 text-right font-semibold">{mxn(i.committedAmount)}</td>
           <td className="p-2">{i.assignmentStatus === "ACTIVE" ? "Activa" : i.assignmentStatus === "RELEASED" ? "Liberada" : "—"}</td></tr>)}</tbody></table></div>
+      {detail.pages > 1 && <div className="mt-2 flex items-center justify-end gap-2 text-sm text-slate-600">
+        <button type="button" className={outline} disabled={busy !== null || detail.page <= 1} onClick={() => void openDetail(detail, detail.page - 1)}>Anterior</button>
+        <span>Página {detail.page} de {detail.pages}</span>
+        <button type="button" className={outline} disabled={busy !== null || detail.page >= detail.pages} onClick={() => void openDetail(detail, detail.page + 1)}>Siguiente</button></div>}
       <h4 className="mt-4 text-sm font-bold text-[#0B3A82]">Historial auditable</h4>
       <ul className="mt-2 space-y-1 text-xs text-slate-600">{detail.auditEvents.map((e, i) => <li key={i}>{stamp(e.createdAt)} · {EVENTS[e.eventType] ?? e.eventType} · {e.actor.name} · {e.orderCount} pedido(s){e.reasonCode ? ` · ${e.reasonCode}` : ""}</li>)}</ul>
     </Modal>}
