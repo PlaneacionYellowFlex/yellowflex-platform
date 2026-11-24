@@ -1,13 +1,13 @@
 import "server-only";
 
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
 import type { AuthenticatedUser } from "@/lib/access-control";
 import { CorporateAuthorizationRequired, requireCorporateUser } from "@/lib/auth/corporate-auth";
 import { hasCpanelPermission } from "@/lib/cpanel/authorization";
 import { hasFoodServicesRhAccess } from "@/lib/food-services/rh-authorization";
 import { db } from "@/lib/db";
 import { FoodServiceError } from "@/lib/food-services/service";
+import { lockFoodOrder } from "@/lib/food-services/order-lock";
 
 export const cancelFoodOrderSchema = z.object({
   orderId: z.string().min(1).max(100),
@@ -26,10 +26,8 @@ export async function requireFoodOrderCancellationAccess() {
   return user;
 }
 
-// Used by cancellation, consumption and payroll export to serialize their decisions.
-export async function lockFoodOrder(tx: Prisma.TransactionClient, orderId: string) {
-  await tx.$queryRaw`SELECT "id" FROM "FoodOrder" WHERE "id" = ${orderId} FOR UPDATE`;
-}
+// Mecanismo compartido con la generación de prenómina (order-lock.ts). Se reexporta por compatibilidad.
+export { lockFoodOrder };
 
 export async function cancelFoodOrder(actor: AuthenticatedUser, raw: unknown) {
   if (!(await canCancelFoodOrder(actor))) throw new CorporateAuthorizationRequired("Acceso restringido");
@@ -55,8 +53,8 @@ export async function cancelFoodOrder(actor: AuthenticatedUser, raw: unknown) {
     if (order.payrollStatus !== "PENDING" || order.payrollExportedAt) {
       throw new FoodServiceError("Nómina exportada, procesada o sin verificar. Requiere conciliación y un ajuste controlado; no se realizará una cancelación simple.", 409);
     }
-    // The future batch creator must take this same order lock before inserting an
-    // ACTIVE assignment. The partial unique index remains the final race guard.
+    // La generación de lotes toma este mismo bloqueo antes de crear la asignación ACTIVE.
+    // El índice único parcial y el trigger de FoodOrder son las barreras finales en PostgreSQL.
     const activeAssignment = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT "id" FROM "FoodPayrollAssignment"
       WHERE "orderId" = ${order.id}

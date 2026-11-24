@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { apiError } from "@/lib/api-response";
 import { requireCpanelAdministrator, rhCanChange } from "@/lib/cpanel/delegation";
-import { cpanelActions, cpanelModules } from "@/lib/cpanel/permission-catalog";
+import { cpanelActions, cpanelModules, isFoodRhOnlyAction } from "@/lib/cpanel/permission-catalog";
 import { db } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -48,7 +48,7 @@ export async function PATCH(request: Request) {
     if (scope === "rh" && (!rhCanChange(input.moduleKey, input.actionKey) || input.userId === actor.id)) {
       return NextResponse.json({ error: "Esta autorización está reservada a Dirección/ADMIN" }, { status: 403 });
     }
-    if (input.actionKey === "cancel-food-order" && input.moduleKey !== "food-services") {
+    if (isFoodRhOnlyAction(input.actionKey) && input.moduleKey !== "food-services") {
       return NextResponse.json({ error: "Acción exclusiva de Food Services" }, { status: 422 });
     }
     const result = await db.$transaction(async (tx) => {
@@ -66,8 +66,10 @@ export async function PATCH(request: Request) {
           !target.roles.some((r) => r.role === "RH")) {
         return { status: 422, error: "La delegación de C-PANEL requiere rol RH" } as const;
       }
-      if (input.actionKey === "cancel-food-order" && input.granted && !target.roles.some(r => r.role === "RH")) {
-        return { status: 422, error: "La cancelación excepcional requiere rol RH" } as const;
+      if (isFoodRhOnlyAction(input.actionKey) && input.granted && !target.roles.some(r => r.role === "RH")) {
+        return { status: 422, error: input.actionKey === "cancel-food-order"
+          ? "La cancelación excepcional requiere rol RH"
+          : "La generación de prenómina requiere rol RH" } as const;
       }
       const key = { userId: input.userId, moduleKey: input.moduleKey, actionKey: input.actionKey };
       const current = await tx.corporateModulePermission.findUnique({ where: { userId_moduleKey_actionKey: key } });
