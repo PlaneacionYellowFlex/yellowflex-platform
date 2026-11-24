@@ -1,3 +1,4 @@
+import { requireModulePermission } from "@/lib/cpanel/module-access";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -21,6 +22,7 @@ export async function POST(
   context: { params: Promise<{ id: string }> },
 ) {
   try {
+    await requireModulePermission("purchases", "approve");
     const { id } = await context.params;
     const input = decisionSchema.parse(await request.json());
 

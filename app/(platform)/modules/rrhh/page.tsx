@@ -1,3 +1,5 @@
+import { getModulePageUser } from "@/lib/cpanel/module-page-access";
+import CpanelAccessRestricted from "@/components/cpanel-access-restricted";
 import {
   ArrowRight,
   Building2,
@@ -16,6 +18,7 @@ import { getTimeControlSummary } from "@/lib/rrhh/time-control-service";
 export const dynamic = "force-dynamic";
 
 export default async function HumanResourcesPage() {
+  if (!(await getModulePageUser("rrhh"))) return <CpanelAccessRestricted moduleName="Recursos Humanos" />;
   const [employees, timeControl] = await Promise.all([
     getEmployees(),
     getTimeControlSummary(),

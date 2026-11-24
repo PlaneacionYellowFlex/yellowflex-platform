@@ -1,6 +1,7 @@
+import { requireModulePermission, requireRhPermission, requireHrDecisionPermission } from "@/lib/cpanel/module-access";
+import { CorporateAuthenticationRequired, CorporateAuthorizationRequired } from "@/lib/auth/corporate-auth";
 import { NextRequest, NextResponse } from "next/server";
 
-import { requireCorporateUser } from "@/lib/auth/corporate-auth";
 import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ type Decision = "APPROVE" | "REJECT" | "REQUEST_INFORMATION";
 
 export async function POST(request: NextRequest, context: RouteContext) {
   try {
-    const user = await requireCorporateUser();
+    const user = await requireHrDecisionPermission();
     const { id } = await context.params;
     const body = await request.json();
     const decision = String(body.decision ?? "") as Decision;
@@ -62,6 +63,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       if (!isManager) {
         return apiError("Solo el jefe inmediato asignado puede resolver esta etapa.", 403);
       }
+      await requireModulePermission("my-rh", "approve");
       stage = "MANAGER";
       if (decision === "APPROVE") nextStatus = "PENDING_HR";
       else if (decision === "REJECT") nextStatus = "REJECTED";
@@ -70,6 +72,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       if (!isHr) {
         return apiError("Solo Recursos Humanos puede resolver esta etapa.", 403);
       }
+      await requireRhPermission("approve");
       stage = "HR";
       if (decision === "APPROVE") nextStatus = "AUTHORIZED";
       else if (decision === "REJECT") nextStatus = "REJECTED";
@@ -124,6 +127,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     return NextResponse.json({ request: result });
   } catch (error) {
+    if (error instanceof CorporateAuthenticationRequired) return apiError(error.message, 401);
+    if (error instanceof CorporateAuthorizationRequired) return apiError("Acceso restringido", 403);
     console.error("POST /api/hr/requests/[id]/decision", error);
     return apiError("No fue posible registrar la decisión.", 500);
   }

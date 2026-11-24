@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { apiError } from "@/lib/api-response";
-import { getEmployeeSession } from "@/lib/food-services/employee-session";
+import { requireFoodEmployee } from "@/lib/food-services/self-service";
 import { confirmWeeklyOrder } from "@/lib/food-services/service";
 import { weeklyReservationSchema } from "@/lib/food-services/validation";
 
@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   try {
-    const session = await getEmployeeSession();
+    const session = await requireFoodEmployee();
 
     if (!session) {
       return NextResponse.json(

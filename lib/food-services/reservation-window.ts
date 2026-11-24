@@ -1,3 +1,4 @@
+import { getFoodReferenceDate } from "@/lib/food-services/reference-date";
 import {
   getFoodLocalDateParts,
   getFoodTimeZone,
@@ -24,7 +25,7 @@ export type ReservationWindowStatus = {
 };
 
 export function getReservationWindowStatus(
-  date = new Date(),
+  date = getFoodReferenceDate(),
 ): ReservationWindowStatus {
   const local = getFoodLocalDateParts(date);
 

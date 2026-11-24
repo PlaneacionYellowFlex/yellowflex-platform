@@ -1,7 +1,11 @@
+import { requireControlTowerAccess } from "@/lib/cpanel/module-access";
+import { apiError } from "@/lib/api-response";
+import { CorporateAuthenticationRequired, CorporateAuthorizationRequired } from "@/lib/auth/corporate-auth";
 import { getOeeData } from "@/repositories/oee.repository";
 
 export async function GET(request: Request) {
   try {
+    await requireControlTowerAccess();
     const { searchParams } = new URL(request.url);
 
     const weekParameter = searchParams.get("week");
@@ -32,6 +36,7 @@ export async function GET(request: Request) {
 
     return Response.json(data);
   } catch (error) {
+    if (error instanceof CorporateAuthenticationRequired || error instanceof CorporateAuthorizationRequired) return apiError(error);
     console.error("OEE API:", error);
 
     return Response.json(

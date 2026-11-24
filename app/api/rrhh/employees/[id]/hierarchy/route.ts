@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { apiError } from "@/lib/api-response";
-import { requireCorporateRole } from "@/lib/auth/corporate-auth";
+import { requireRhPermission } from "@/lib/cpanel/module-access";
 import {
   getEmployeeHierarchyCatalog,
   updateEmployeeHierarchy,
@@ -16,7 +16,7 @@ type RouteContext = {
 
 export async function GET(_request: Request, context: RouteContext) {
   try {
-    await requireCorporateRole(["RH"]);
+    await requireRhPermission("view");
     const { id } = await context.params;
     const data = await getEmployeeHierarchyCatalog(id);
     return NextResponse.json({ data });
@@ -27,7 +27,7 @@ export async function GET(_request: Request, context: RouteContext) {
 
 export async function PUT(request: Request, context: RouteContext) {
   try {
-    const user = await requireCorporateRole(["RH"]);
+    const user = await requireRhPermission("manage");
     const { id } = await context.params;
     const input = employeeHierarchySchema.parse(await request.json());
     const data = await updateEmployeeHierarchy(id, input, user.id);

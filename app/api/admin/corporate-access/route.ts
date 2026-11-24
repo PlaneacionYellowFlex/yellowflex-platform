@@ -126,6 +126,7 @@ export async function GET() {
     return NextResponse.json({
       users: users.map((u) => ({
         ...u,
+        email: u.email ?? "",
         roles: u.roles.map((r) => r.role),
         purchasePermissions: u.purchasePermission ?? noPermissions,
       })),
@@ -144,7 +145,8 @@ export async function POST(request: Request) {
     const pError = permissionError(input.purchasePermissions);
     if (pError) return NextResponse.json({ error: pError }, { status: 422 });
 
-    if (!input.roles.includes("DIRECCION") && !input.employeeId) {
+    const externalChef = input.roles.every((role) => role === "CHEF");
+    if (!input.roles.includes("DIRECCION") && !externalChef && !input.employeeId) {
       return NextResponse.json(
         { error: "Selecciona un colaborador existente." },
         { status: 422 },

@@ -47,7 +47,7 @@ export const weeklyReservationSchema = z.object({
       (items) => new Set(items).size === items.length,
       "La selección contiene opciones duplicadas.",
     ),
-});
+}).strict();
 
 export const consumptionSchema = z.object({
   menuItemId: z.string().cuid(),

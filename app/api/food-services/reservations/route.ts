@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { apiError } from "@/lib/api-response";
 import { db } from "@/lib/db";
-import { getEmployeeSession } from "@/lib/food-services/employee-session";
+import { requireFoodEmployee } from "@/lib/food-services/self-service";
 import { getReservationWindowStatus } from "@/lib/food-services/reservation-window";
 import { saveWeeklyReservations } from "@/lib/food-services/service";
 import {
@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    const session = await getEmployeeSession();
+    const session = await requireFoodEmployee();
 
     if (!session) {
       return NextResponse.json(
@@ -72,37 +72,19 @@ export async function GET() {
       );
     }
 
-    if (!employee.workShift || !employee.workShift.active) {
-      return NextResponse.json(
-        {
-          error:
-            "El colaborador no tiene un turno activo configurado para Food Services.",
-        },
-        {
-          status: 409,
-        },
-      );
-    }
-
-    let shiftPolicy;
-
-    try {
-      shiftPolicy = getFoodShiftPolicy(
-        employee.workShift,
-      );
-    } catch (error) {
-      if (error instanceof FoodShiftPolicyError) {
-        return NextResponse.json(
-          {
-            error: error.message,
-          },
-          {
-            status: 409,
-          },
-        );
+    let shiftMessage: string | null = null;
+    let shiftPolicy = {
+      isNightShift: false, workdays: [0, 1, 2, 3, 4, 5, 6], maximumServicesPerDay: 0,
+      allowedServiceTypes: ["BREAKFAST", "LUNCH"] as ("BREAKFAST" | "LUNCH")[], serviceLabel: "Turno pendiente en RH",
+    };
+    if (!employee.workShift?.active) {
+      shiftMessage = "Puedes consultar el menú y tus solicitudes. RH debe asignarte un turno activo antes de solicitar alimentos.";
+    } else {
+      try { shiftPolicy = getFoodShiftPolicy(employee.workShift); }
+      catch (error) {
+        if (!(error instanceof FoodShiftPolicyError)) throw error;
+        shiftMessage = error.message;
       }
-
-      throw error;
     }
 
     const week = await db.menuWeek.findUnique({
@@ -128,7 +110,9 @@ export async function GET() {
     const baseData = {
       weekStart: reservationWindow.targetWeekStart,
       isOpen: reservationWindow.isOpen,
-      pinMustChange: employee.pinMustChange,
+      pinMustChange: false, // Corporate authentication is sufficient; no additional PIN is required.
+      canRequest: shiftMessage === null,
+      shiftMessage,
       employee: {
         employeeNumber: employee.employeeNumber,
         fullName: employee.fullName,
@@ -137,14 +121,14 @@ export async function GET() {
           code: employee.department.code,
           name: employee.department.name,
         },
-        workShift: {
+        workShift: employee.workShift ? {
           code: employee.workShift.code,
           name: employee.workShift.name,
           startTime: employee.workShift.startTime,
           endTime: employee.workShift.endTime,
           crossesMidnight:
             employee.workShift.crossesMidnight,
-        },
+        } : null,
       },
       policy: {
         isNightShift: shiftPolicy.isNightShift,
@@ -182,6 +166,7 @@ export async function GET() {
         unitPrice: true,
         totalAmount: true,
         confirmedAt: true,
+        cancellation: { select: { reason: true, createdAt: true } },
       },
     });
 
@@ -206,6 +191,7 @@ export async function GET() {
     return NextResponse.json({
       data: {
         ...baseData,
+        canRequest: baseData.canRequest && !confirmedOrder,
         weekStart: week.weekStart,
         menuItemIds: reservations.map(
           (reservation) => reservation.menuItemId,
@@ -222,6 +208,7 @@ export async function GET() {
               totalAmount:
                 confirmedOrder.totalAmount.toString(),
               confirmedAt: confirmedOrder.confirmedAt,
+              cancellation: confirmedOrder.cancellation,
             }
           : null,
       },
@@ -233,7 +220,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const session = await getEmployeeSession();
+    const session = await requireFoodEmployee();
 
     if (!session) {
       return NextResponse.json(

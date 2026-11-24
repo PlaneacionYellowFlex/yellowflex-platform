@@ -1,3 +1,4 @@
+import { requireModulePermission } from "@/lib/cpanel/module-access";
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
@@ -58,6 +59,7 @@ function requestSelect() {
 
 export async function GET() {
   try {
+    await requireModulePermission("purchases", "view");
     const user = await requireCorporateUser();
     const permissions = await getMyPurchasePermissions();
 
@@ -83,6 +85,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    await requireModulePermission("purchases", "operate");
     const user = await requireCorporateUser();
     const permissions = await getMyPurchasePermissions();
     const input = createSchema.parse(await request.json());

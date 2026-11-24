@@ -321,7 +321,7 @@ export default function PurchasePermissionsAdminPage() {
                     {user.name}
                   </span>
                   <span className="mt-1 block break-all text-xs text-slate-500">
-                    {user.email}
+                    {user.email ?? "Sin correo"}
                   </span>
                   <span className="mt-2 flex flex-wrap gap-1">
                     {user.roles.map((role) => (

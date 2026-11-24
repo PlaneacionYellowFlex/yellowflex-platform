@@ -1,3 +1,5 @@
+import { requireModulePermission } from "@/lib/cpanel/module-access";
+import { hasCpanelPermission } from "@/lib/cpanel/authorization";
 import { NextResponse } from "next/server";
 import { apiError } from "@/lib/api-response";
 import { CorporateAuthorizationRequired, requireCorporateUser } from "@/lib/auth/corporate-auth";
@@ -5,9 +7,9 @@ import { getInventoryBalances, getWarehousePermission, listInventoryItems, listW
 
 async function requireWarehouseInventoryAccess() {
   const user = await requireCorporateUser();
-  if (user.roles.some((role) => role === "ADMIN" || role === "DIRECCION")) return user;
+  if (user.roles.includes("ADMIN")) return user;
   const permission = await getWarehousePermission(user.id);
-  if (!permission?.canViewInventory) {
+  if (!permission?.canViewInventory || !(await hasCpanelPermission(user.id, "warehouse", "view"))) {
     throw new CorporateAuthorizationRequired("No tienes permiso para consultar el inventario de Almacén.");
   }
   return user;
@@ -15,6 +17,7 @@ async function requireWarehouseInventoryAccess() {
 
 export async function GET() {
   try {
+    await requireModulePermission("warehouse", "view");
     await requireWarehouseInventoryAccess();
     const [items, warehouses, balances] = await Promise.all([
       listInventoryItems(),

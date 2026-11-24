@@ -218,7 +218,6 @@ export async function saveWeeklyReservations(
       menuWeek: {
         weekStart: targetWeekStart,
       },
-      status: "CONFIRMED",
     },
     select: {
       id: true,
@@ -441,6 +440,10 @@ export async function saveWeeklyReservations(
   }
 
   await db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext(${employeeId}), hashtext(${targetWeek.id}))`;
+    if (await tx.foodOrder.findUnique({ where: { employeeId_menuWeekId: { employeeId, menuWeekId: targetWeek.id } } })) {
+      throw new FoodServiceError("Tu pedido ya está confirmado o cancelado y no puede modificarse.", 409);
+    }
     if (reservationsToDelete.length > 0) {
       await tx.reservation.deleteMany({
         where: {
@@ -672,6 +675,7 @@ export async function confirmWeeklyOrder(
 
   try {
     return await db.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext(${employeeId}), hashtext(${targetWeek.id}))`;
       const existingOrder = await tx.foodOrder.findUnique({
         where: {
           employeeId_menuWeekId: {
@@ -743,6 +747,7 @@ export async function confirmWeeklyOrder(
           employeeId,
           menuWeekId: targetWeek.id,
           status: "CONFIRMED",
+          payrollStatus: "PENDING",
           itemCount,
           unitPrice: FOOD_SERVICE_PRICE,
           totalAmount,
@@ -808,8 +813,15 @@ export async function registerConsumption(
     | "BARCODE"
     | "NFC",
 ) {
+  return db.$transaction(async tx => {
+  const linked = await tx.reservation.findUnique({ where: { employeeId_menuItemId: { employeeId, menuItemId } }, select: { foodOrderId: true } });
+  if (linked?.foodOrderId) {
+    await tx.$queryRaw`SELECT "id" FROM "FoodOrder" WHERE "id" = ${linked.foodOrderId} FOR UPDATE`;
+    const order = await tx.foodOrder.findUnique({ where: { id: linked.foodOrderId }, select: { status: true } });
+    if (order?.status !== "CONFIRMED") throw new FoodServiceError("El pedido no está confirmado.", 409);
+  }
   const reservation =
-    await db.reservation.findUnique({
+    await tx.reservation.findUnique({
       where: {
         employeeId_menuItemId: {
           employeeId,
@@ -879,7 +891,7 @@ export async function registerConsumption(
   }
 
   try {
-    return await db.consumption.create({
+    return await tx.consumption.create({
       data: {
         employeeId,
         menuItemId: item.id,
@@ -890,7 +902,7 @@ export async function registerConsumption(
     });
   } catch {
     const existingConsumption =
-      await db.consumption.findUnique({
+      await tx.consumption.findUnique({
         where: {
           employeeId_menuItemId: {
             employeeId,
@@ -914,4 +926,5 @@ export async function registerConsumption(
       500,
     );
   }
+  });
 }

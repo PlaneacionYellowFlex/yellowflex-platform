@@ -39,6 +39,10 @@ type ProductionService = {
   extraordinary: number;
   departments: DepartmentSummary[];
   shifts: ShiftSummary[];
+  collaborators: {
+    name: string; employeeNumber: string; shift: string; quantity: number;
+    orderStatus: "CONFIRMED" | null;
+  }[];
 };
 
 type ProductionDay = {
@@ -51,16 +55,21 @@ type ProductionDay = {
 };
 
 type ProductionSummary = {
+  isQaReference: boolean;
   week: {
     id: string;
     weekStart: string;
     publishedAt: string | null;
   } | null;
   totals: {
+    uniqueCollaborators: number;
+    confirmedOrders: number;
     confirmedServices: number;
     consumedServices: number;
     pendingServices: number;
     extraordinaryServices: number;
+    ordinaryServices: number;
+    ordinaryAmount: string;
   };
   days: ProductionDay[];
 };
@@ -91,7 +100,7 @@ function serviceLabel(serviceType: ProductionService["serviceType"]) {
   return serviceType === "BREAKFAST" ? "Desayuno" : "Comida";
 }
 
-export default function ChefProductionDashboard() {
+export default function ChefProductionDashboard({ canExport = false }: { canExport?: boolean }) {
   const [data, setData] = useState<ProductionSummary>();
   const [isLoading, setIsLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
@@ -143,6 +152,8 @@ export default function ChefProductionDashboard() {
       return;
     }
 
+    // Informational download: no payroll state transition or official batch.
+
     try {
       setIsExporting(true);
       setError(undefined);
@@ -151,7 +162,7 @@ export default function ChefProductionDashboard() {
         `/api/food-services/chef/billing/export?weekId=${encodeURIComponent(
           data.week.id,
         )}`,
-        { cache: "no-store" },
+        { method: "POST", cache: "no-store" },
       );
 
       if (!response.ok) {
@@ -247,6 +258,7 @@ export default function ChefProductionDashboard() {
               Producción de Cocina
             </h2>
 
+            {data?.isQaReference && <p className="mt-3 text-xs font-bold text-amber-800">Semana ficticia QA</p>}
             <p className="mt-2 text-sm leading-6 text-slate-500">
               Todavía no existe una semana publicada para calcular la
               producción.
@@ -285,7 +297,7 @@ export default function ChefProductionDashboard() {
 
             <div className="mt-4 inline-flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-sm font-semibold ring-1 ring-white/15">
               <CalendarDays className="size-4 text-[#F4B400]" />
-              Semana del{" "}
+              {data.isQaReference ? "Semana ficticia QA · " : "Semana del "}
               {weekFormatter.format(
                 new Date(data.week.weekStart),
               )}
@@ -295,7 +307,8 @@ export default function ChefProductionDashboard() {
           <div className="flex flex-col gap-2 sm:flex-row">
             <button
               type="button"
-              disabled={isExporting}
+              title={canExport ? undefined : "Acceso restringido para exportar cobros"}
+              disabled={!canExport || isExporting}
               onClick={() => void exportBilling()}
               className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#F4B400] px-4 text-sm font-black text-[#0B3A82] transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -304,7 +317,7 @@ export default function ChefProductionDashboard() {
               ) : (
                 <Download className="size-4" />
               )}
-              {isExporting ? "Generando..." : "Descargar corte Excel"}
+              {isExporting ? "Generando..." : "Descargar reporte Excel"}
             </button>
 
             <button
@@ -325,30 +338,25 @@ export default function ChefProductionDashboard() {
       </div>
 
       <div className="border-b border-slate-200 bg-white px-6 py-6 lg:px-8">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
-              Total semanal a preparar
-            </p>
-
-            <div className="mt-2 flex items-end gap-3">
-              <p className="text-5xl font-black tracking-tight text-[#0B3A82]">
-                {data.totals.confirmedServices}
-              </p>
-
-              <p className="pb-1 text-sm font-bold text-slate-500">
-                servicios a preparar
-              </p>
+        <dl className="grid gap-3 sm:grid-cols-3">
+          {[
+            ["Servicios confirmados", data.totals.confirmedServices, "Porciones a preparar"],
+            ["Colaboradores únicos", data.totals.uniqueCollaborators, "Personas con pedido confirmado"],
+            ["Pedidos confirmados", data.totals.confirmedOrders, "Cada pedido se cuenta una sola vez"],
+          ].map(([label, value, hint]) => (
+            <div key={label} className="rounded-2xl border border-blue-100 bg-slate-50/70 p-5">
+              <dt className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</dt>
+              <dd className="mt-2 text-4xl font-black tracking-tight text-[#0B3A82]">{value}</dd>
+              <p className="mt-2 text-xs text-slate-500">{hint}</p>
             </div>
-          </div>
-
-          <div className="max-w-md rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-            <p className="text-xs font-bold leading-5 text-amber-800">
-              El total integra pedidos confirmados de colaboradores y consumos
-              extraordinarios autorizados por RH.
-            </p>
-          </div>
-        </div>
+          ))}
+        </dl>
+        <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">
+          Los servicios incluyen pedidos confirmados y extraordinarios autorizados por RH.
+          Colaboradores y pedidos cuentan únicamente las solicitudes confirmadas de empleados.
+          {" "}Ordinarios: {data.totals.ordinaryServices} servicios · Importe comprometido: {new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(Number(data.totals.ordinaryAmount))}.
+          {" "}El Excel es informativo: no cambia estados ni acredita descuentos de nómina.
+        </p>
       </div>
 
       <div className="p-5 lg:p-8">
@@ -453,6 +461,30 @@ export default function ChefProductionDashboard() {
                           porción
                           {service.confirmed === 1 ? "" : "es"}
                         </p>
+                      </div>
+                      <div className="min-w-0 lg:col-span-2">
+                        <h4 className="text-xs font-black uppercase tracking-wide text-slate-500">Desglose por colaborador</h4>
+                        {service.collaborators.length === 0 ? (
+                          <p className="mt-3 text-sm text-slate-500">Sin pedidos de colaboradores para este platillo.</p>
+                        ) : (
+                          <ul className="mt-3 divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                            {service.collaborators.map((collaborator) => (
+                              <li key={collaborator.employeeNumber} className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                                <div className="min-w-0">
+                                  <p className="break-words text-sm font-bold text-slate-900">{collaborator.name}</p>
+                                  <p className="mt-1 break-words text-xs text-slate-500">Empleado {collaborator.employeeNumber}</p>
+                                  <p className="mt-1 break-words text-xs text-slate-500">Turno {collaborator.shift}</p>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-black text-[#0B3A82]">Cantidad: {collaborator.quantity}</span>
+                                  <span className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800">
+                                    {collaborator.orderStatus === "CONFIRMED" ? "Pedido confirmado" : "Sin pedido confirmado"}
+                                  </span>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                       </div>
                     </div>
                   ))}

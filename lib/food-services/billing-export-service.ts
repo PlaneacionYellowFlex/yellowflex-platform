@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+import { db } from "@/lib/db";
 import ExcelJS from "exceljs";
 import { getHrBillingSummary } from "@/lib/food-services/hr-billing-service";
 import { getExtraordinaryFoodServicesByWeek } from "@/lib/food-services/extraordinary-service";
@@ -103,12 +105,12 @@ function applyTitle(
   worksheet.getRow(2).height = 20;
 }
 
-export async function buildFoodServicesBillingExport(weekId: string) {
+export async function buildFoodServicesBillingExport(weekId: string, snapshot?: Awaited<ReturnType<typeof getHrBillingSummary>>, client: Prisma.TransactionClient = db) {
   if (!weekId) {
     throw new Error("Debes indicar la semana que deseas exportar.");
   }
 
-    const billing = await getHrBillingSummary();
+    const billing = snapshot ?? await getHrBillingSummary();
 
     const selectedWeek = billing.weeks.find(
       (week) => week.id === weekId,
@@ -429,7 +431,7 @@ export async function buildFoodServicesBillingExport(weekId: string) {
     applyTitle(
       control,
       "YELLOWFLEX · FOOD SERVICES",
-      "Validación del corte de nómina",
+      "Reporte informativo · No acredita descuento ni genera lote oficial",
       4,
     );
 
@@ -523,7 +525,7 @@ export async function buildFoodServicesBillingExport(weekId: string) {
       { width: 4 },
     ];
 
-    const extraordinary = await getExtraordinaryFoodServicesByWeek(weekId);
+    const extraordinary = await getExtraordinaryFoodServicesByWeek(weekId, client);
 
     const extraordinarySheet = workbook.addWorksheet("Servicios Extraordinarios", {
       views: [{ state: "frozen", ySplit: 5 }],

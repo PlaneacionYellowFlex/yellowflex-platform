@@ -1,3 +1,4 @@
+import { requireModulePermission } from "@/lib/cpanel/module-access";
 import { NextResponse } from "next/server";
 import { apiError } from "@/lib/api-response";
 import { CorporateAuthorizationRequired, requireCorporateUser } from "@/lib/auth/corporate-auth";
@@ -10,6 +11,7 @@ async function access() {
 }
 export async function GET() {
   try {
+    await requireModulePermission("warehouse", "view");
     await access();
     const rows = await listProductionAvailableCustodies();
     return NextResponse.json({ custodies: rows.map((c) => ({ id:c.id, folio:c.folio, quantity:c.quantity.toNumber(), unit:c.unit, enteredAt:c.enteredAt, referenceType:c.referenceType, referenceNumber:c.referenceNumber, notes:c.notes, item:{id:c.item.id,code:c.item.code,description:c.item.description}, custodianArea:{code:c.custodianArea.code,name:c.custodianArea.name} })) });

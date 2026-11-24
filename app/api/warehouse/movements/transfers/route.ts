@@ -1,3 +1,5 @@
+import { requireModulePermission } from "@/lib/cpanel/module-access";
+import { hasCpanelPermission } from "@/lib/cpanel/authorization";
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { validateInventoryMovement } from "@/engines/warehouse";
@@ -10,9 +12,9 @@ import { createInternalTransfer, InsufficientWarehouseTransferStockError, Wareho
 
 async function requireAccess() {
   const user = await requireCorporateUser();
-  if (user.roles.some((role) => role === "ADMIN" || role === "DIRECCION")) return user;
+  if (user.roles.includes("ADMIN")) return user;
   const permission = await getWarehousePermission(user.id);
-  if (!permission?.canRegisterMovement) throw new CorporateAuthorizationRequired("No tienes permiso para registrar movimientos de Almacén.");
+  if (!permission?.canRegisterMovement || !(await hasCpanelPermission(user.id, "warehouse", "operate"))) throw new CorporateAuthorizationRequired("No tienes permiso para registrar movimientos de Almacén.");
   return user;
 }
 function folio() {
@@ -24,6 +26,7 @@ function optional(v: unknown) { return typeof v==="string" && v.trim() ? v.trim(
 
 export async function GET() {
   try {
+    await requireModulePermission("warehouse", "view");
     await requireAccess();
     const [items,warehouses]=await Promise.all([listInventoryItems(),listWarehouses()]);
     return NextResponse.json({
@@ -34,6 +37,7 @@ export async function GET() {
 }
 export async function POST(request: Request) {
   try {
+    await requireModulePermission("warehouse", "operate");
     const user=await requireAccess();
     const b=await request.json();
     const itemId=typeof b.itemId==="string"?b.itemId.trim():"";

@@ -117,6 +117,16 @@ function validateWeekDates(
   }
 }
 
+export async function getNextMenuWeek() {
+  const weekStart = await getEditableWeekStart();
+  const existing = await db.menuWeek.findUnique({ where: { weekStart }, include: menuWeekInclude });
+  if (existing) return existing;
+  return {
+    id: "", weekStart, status: "DRAFT" as const,
+    days: Array.from({ length: 7 }, (_, index) => ({ id: "", serviceDate: addFoodDays(weekStart, index), items: [] })),
+  };
+}
+
 export async function getOrCreateNextMenuWeek() {
   const weekStart =
     await getEditableWeekStart();

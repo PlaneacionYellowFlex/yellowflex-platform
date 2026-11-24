@@ -10,6 +10,8 @@ import {
   UserPlus,
   Users,
 } from "lucide-react";
+import CpanelPermissionEditor from "@/components/cpanel-permission-editor";
+
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
 type PermissionKey =
@@ -50,6 +52,7 @@ type ResponseBody = {
   users?: User[];
   employees?: Employee[];
   initialPassword?: string;
+  ok?: boolean;
   error?: string;
 };
 
@@ -119,7 +122,7 @@ export default function CorporateAccessPage() {
       credentials: "same-origin",
     });
     const data = (await response.json()) as ResponseBody;
-    if (!response.ok) throw new Error(data.error ?? "Sin acceso.");
+    if (!response.ok) throw new Error(response.status === 403 ? "Acceso restringido" : data.error ?? "Sin acceso.");
     setEmployees(data.employees ?? []);
     setUsers(data.users ?? []);
   }, []);
@@ -241,6 +244,36 @@ export default function CorporateAccessPage() {
       setEmployeeId("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "No fue posible crear la cuenta.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetPassword() {
+    if (!selectedUser || busy) return;
+    const confirmed = window.confirm(
+      `¿Restablecer la contraseña de ${selectedUser.name}? Se cerrarán sus sesiones y deberá cambiar la nueva contraseña al ingresar.`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    clearMessages();
+    try {
+      const response = await fetch("/api/admin/corporate-access/reset-password", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: selectedUser.id }),
+      });
+      const data = (await response.json()) as ResponseBody;
+      if (!response.ok || !data.initialPassword) {
+        throw new Error(data.error ?? "No se pudo restablecer la contraseña.");
+      }
+      setInitialPassword(data.initialPassword);
+      setSuccess("Contraseña restablecida. Entrega la clave temporal al titular; se mostrará solo en esta pantalla.");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No fue posible restablecer la contraseña.");
     } finally {
       setBusy(false);
     }
@@ -442,10 +475,23 @@ export default function CorporateAccessPage() {
                 {busy ? <Loader2 className="size-5 animate-spin" /> : mode !== "edit" ? <UserPlus className="size-5" /> : <CheckCircle2 className="size-5" />}
                 {busy ? "Guardando..." : mode !== "edit" ? "Crear acceso a Platform" : "Guardar cambios"}
               </button>
+              {mode === "edit" && selectedUser && (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <h3 className="flex items-center gap-2 text-sm font-bold text-amber-950"><KeyRound className="size-4" /> Recuperación de acceso</h3>
+                  <p className="mt-2 text-xs text-amber-900">Solo ADMIN. Genera una contraseña temporal y cierra las sesiones existentes. No modifica roles ni permisos.</p>
+                  <button type="button" disabled={busy || !selectedUser.active} onClick={resetPassword} className="mt-3 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-amber-300 bg-white px-4 py-3 text-sm font-bold text-amber-950 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50">
+                    {busy ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+                    Restablecer contraseña
+                  </button>
+                </div>
+              )}
             </form>
           )}
         </section>
       </div>
+      {mode === "edit" && selectedUser && (
+        <CpanelPermissionEditor key={selectedUser.id} userId={selectedUser.id} userName={selectedUser.name} />
+      )}
     </main>
   );
 }

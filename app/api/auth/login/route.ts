@@ -10,10 +10,7 @@ import { apiError } from "@/lib/api-response";
 export const runtime = "nodejs";
 
 const loginSchema = z.object({
-  email: z
-    .string()
-    .trim()
-    .email("Ingresa un correo electrónico válido."),
+  identifier: z.string().trim().min(1).max(254),
   password: z
     .string()
     .min(1, "La contraseña es obligatoria.")
@@ -25,7 +22,7 @@ export async function POST(request: Request) {
     const input = loginSchema.parse(await request.json());
 
     const user = await authenticateCorporateUser(
-      input.email,
+      input.identifier,
       input.password,
     );
 

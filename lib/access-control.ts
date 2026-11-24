@@ -21,7 +21,7 @@ export type AuthenticatedEmployee = {
 export type AuthenticatedUser = {
   id: string;
   name: string;
-  email: string;
+  email: string | null;
   roles: PlatformRole[];
   employee: AuthenticatedEmployee | null;
 };

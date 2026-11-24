@@ -1,3 +1,5 @@
+import { requireModulePermission } from "@/lib/cpanel/module-access";
+import { hasCpanelPermission } from "@/lib/cpanel/authorization";
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 
@@ -24,13 +26,13 @@ import { db } from "@/lib/db";
 async function requireWarehouseMovementAccess() {
   const user = await requireCorporateUser();
 
-  if (user.roles.some((role) => role === "ADMIN" || role === "DIRECCION")) {
+  if (user.roles.includes("ADMIN")) {
     return user;
   }
 
   const permission = await getWarehousePermission(user.id);
 
-  if (!permission?.canRegisterMovement) {
+  if (!permission?.canRegisterMovement || !(await hasCpanelPermission(user.id, "warehouse", "operate"))) {
     throw new CorporateAuthorizationRequired(
       "No tienes permiso para registrar movimientos de Almacén.",
     );
@@ -57,6 +59,7 @@ function custodyFolio(date: Date) {
 
 export async function GET() {
   try {
+    await requireModulePermission("warehouse", "view");
     await requireWarehouseMovementAccess();
 
     const [items, balances] = await Promise.all([
@@ -92,6 +95,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    await requireModulePermission("warehouse", "operate");
     const user = await requireWarehouseMovementAccess();
     const body = await request.json();
 

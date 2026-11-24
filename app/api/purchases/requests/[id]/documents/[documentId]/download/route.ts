@@ -1,3 +1,4 @@
+import { requireModulePermission } from "@/lib/cpanel/module-access";
 import { NextResponse } from "next/server";
 
 import { apiError } from "@/lib/api-response";
@@ -8,6 +9,7 @@ import { getPurchaseStorage } from "@/lib/purchases/purchase-storage";
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string; documentId: string }> }) {
   try {
+    await requireModulePermission("purchases", "view");
     const user = await requireCorporateUser();
     const permissions = await getMyPurchasePermissions();
     const { id, documentId } = await context.params;

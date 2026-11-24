@@ -1,3 +1,4 @@
+import { requireModulePermission } from "@/lib/cpanel/module-access";
 import { createHash, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 
@@ -17,6 +18,7 @@ function safeName(name: string) {
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   let uploadedKey: string | null = null;
   try {
+    await requireModulePermission("purchases", "operate");
     const actor = await requireCorporateUser();
     const permissions = await getMyPurchasePermissions();
     const { id } = await context.params;

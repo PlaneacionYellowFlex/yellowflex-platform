@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { apiError } from "@/lib/api-response";
-import { requireCorporateRole } from "@/lib/auth/corporate-auth";
+import { requireChefPermission } from "@/lib/cpanel/module-access";
 import { getChefProductionSummary } from "@/lib/food-services/chef-production-service";
 import {
   getChefMenuHistory,
-  getOrCreateNextMenuWeek,
+  getNextMenuWeek,
   publishNextMenuWeek,
   saveNextMenuWeek,
 } from "@/lib/food-services/chef-service";
@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 
 export async function GET(request: Request) {
   try {
-    await requireCorporateRole(["CHEF"]);
+    await requireChefPermission("view");
 
     const url = new URL(request.url);
     const view = url.searchParams.get("view");
@@ -30,7 +30,7 @@ export async function GET(request: Request) {
 
     if (view === "production") {
       const production =
-        await getChefProductionSummary();
+        await getChefProductionSummary(url.searchParams.get("weekId") || undefined);
 
       return NextResponse.json({
         data: production,
@@ -38,7 +38,7 @@ export async function GET(request: Request) {
     }
 
     const menuWeek =
-      await getOrCreateNextMenuWeek();
+      await getNextMenuWeek();
 
     return NextResponse.json({
       data: menuWeek,
@@ -50,7 +50,7 @@ export async function GET(request: Request) {
 
 export async function PUT(request: Request) {
   try {
-    await requireCorporateRole(["CHEF"]);
+    await requireChefPermission("operate");
 
     const input = chefWeeklyMenuSchema.parse(
       await request.json(),
@@ -69,7 +69,7 @@ export async function PUT(request: Request) {
 
 export async function POST() {
   try {
-    await requireCorporateRole(["CHEF"]);
+    await requireChefPermission("operate");
 
     const result =
       await publishNextMenuWeek();

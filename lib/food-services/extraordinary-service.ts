@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import type { ExtraordinaryFoodServiceInput } from "@/lib/food-services/validation";
 
@@ -11,8 +12,8 @@ export async function getExtraordinaryFoodServices() {
   return { week, records: records.map((record) => ({ ...record, priceApplied: record.priceApplied.toString(), menuItem: { ...record.menuItem, price: record.menuItem.price.toString() } })) };
 }
 
-export async function getExtraordinaryFoodServicesByWeek(weekId: string) {
-  const records = await db.foodExtraordinaryService.findMany({ where: { status: "ACTIVE", menuItem: { menuDay: { menuWeekId: weekId } } }, orderBy: [{ menuItem: { menuDay: { serviceDate: "asc" } } }, { createdAt: "asc" }], select: { id: true, guestName: true, guestType: true, company: true, quantity: true, priceApplied: true, chargeType: true, areaResponsible: true, reason: true, notes: true, createdAt: true, authorizedBy: { select: { name: true, email: true } }, menuItem: { select: { id: true, serviceType: true, name: true, menuDay: { select: { serviceDate: true } } } } } });
+export async function getExtraordinaryFoodServicesByWeek(weekId: string, client: Prisma.TransactionClient = db) {
+  const records = await client.foodExtraordinaryService.findMany({ where: { status: "ACTIVE", menuItem: { menuDay: { menuWeekId: weekId } } }, orderBy: [{ menuItem: { menuDay: { serviceDate: "asc" } } }, { createdAt: "asc" }], select: { id: true, guestName: true, guestType: true, company: true, quantity: true, priceApplied: true, chargeType: true, areaResponsible: true, reason: true, notes: true, createdAt: true, authorizedBy: { select: { name: true, email: true } }, menuItem: { select: { id: true, serviceType: true, name: true, menuDay: { select: { serviceDate: true } } } } } });
   return records.map((record) => ({ ...record, priceApplied: record.priceApplied.toString() }));
 }
 

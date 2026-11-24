@@ -1,3 +1,4 @@
+import { getFoodReferenceDate } from "@/lib/food-services/reference-date";
 const FOOD_TIME_ZONE =
   process.env.FOOD_TIME_ZONE ?? "America/Mexico_City";
 
@@ -15,7 +16,7 @@ export function getFoodTimeZone() {
 }
 
 export function getFoodLocalDateParts(
-  date = new Date(),
+  date = getFoodReferenceDate(),
 ): FoodLocalDateParts {
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: FOOD_TIME_ZONE,
@@ -66,7 +67,7 @@ export function getFoodLocalDateParts(
 }
 
 export function getNextFoodWeekStart(
-  date = new Date(),
+  date = getFoodReferenceDate(),
 ) {
   const local = getFoodLocalDateParts(date);
 

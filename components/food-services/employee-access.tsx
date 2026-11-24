@@ -51,7 +51,7 @@ type EmployeeProfile = {
     startTime: string;
     endTime: string;
     crossesMidnight: boolean;
-  };
+  } | null;
 };
 
 type FoodPolicy = {
@@ -69,11 +69,14 @@ type OrderSummary = {
   unitPrice: string;
   totalAmount: string;
   confirmedAt: string;
+  cancellation?: { reason: string; createdAt: string } | null;
 };
 
 type ReservationState = {
   weekStart: string;
   isOpen: boolean;
+  canRequest: boolean;
+  shiftMessage: string | null;
   pinMustChange: boolean;
   menuItemIds: string[];
   employee: EmployeeProfile;
@@ -386,7 +389,7 @@ export default function EmployeeAccess() {
     parentDay: MenuDay,
   ) {
     if (
-      !reservationState?.isOpen ||
+      !reservationState?.canRequest || !reservationState?.isOpen ||
       reservationState.isConfirmed
     ) {
       return;
@@ -816,23 +819,23 @@ export default function EmployeeAccess() {
                   <p className="mt-1 text-sm font-semibold text-slate-700">
                     {
                       reservationState.employee
-                        .workShift.code
+                        .workShift?.code ?? "Sin turno"
                     }{" "}
                     ·{" "}
                     {
                       reservationState.employee
-                        .workShift.name
+                        .workShift?.name ?? "Pendiente en RH"
                     }
                   </p>
                   <p className="mt-1 text-xs text-slate-500">
                     {
                       reservationState.employee
-                        .workShift.startTime
+                        .workShift?.startTime ?? "—"
                     }{" "}
                     –{" "}
                     {
                       reservationState.employee
-                        .workShift.endTime
+                        .workShift?.endTime ?? "—"
                     }{" "}
                     ·{" "}
                     {
@@ -869,7 +872,9 @@ export default function EmployeeAccess() {
 
               <div>
                 <p className="font-bold text-slate-900">
-                  {reservationState.isConfirmed
+                  {reservationState.order?.status === "CANCELLED"
+                    ? "Pedido cancelado"
+                    : reservationState.isConfirmed
                     ? "Pedido confirmado"
                     : reservationState.isOpen
                       ? "Reservaciones abiertas"
@@ -877,7 +882,9 @@ export default function EmployeeAccess() {
                 </p>
 
                 <p className="mt-1 text-sm leading-5 text-slate-600">
-                  {reservationState.isConfirmed
+                  {reservationState.order?.status === "CANCELLED"
+                    ? "La cancelación excepcional fue registrada por RH. Tu selección no puede modificarse."
+                    : reservationState.isConfirmed
                     ? "Tu pedido quedó registrado definitivamente y ya no puede modificarse."
                     : reservationState.isOpen
                       ? "Puedes modificar tu selección hasta confirmar definitivamente tu pedido o hasta el sábado a las 11:59 p. m."
@@ -887,6 +894,14 @@ export default function EmployeeAccess() {
             </div>
           </div>
 
+          {reservationState.order?.status === "CANCELLED" && (
+            <div role="status" className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+              <p className="font-bold">Pedido cancelado por RH</p>
+              <p className="mt-1">{reservationState.order.cancellation?.reason}</p>
+              <p className="mt-1">Este pedido queda bloqueado y no genera un cargo de nómina. No puedes modificarlo ni reactivarlo.</p>
+            </div>
+          )}
+          {reservationState.shiftMessage && <p role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{reservationState.shiftMessage}</p>}
           {!targetWeek ? (
             <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-5 text-sm leading-6 text-slate-500">
               El Chef todavía no ha publicado el menú
@@ -983,7 +998,7 @@ export default function EmployeeAccess() {
                                           }
                                           type="button"
                                           disabled={
-                                            !reservationState.isOpen ||
+                                            !reservationState.canRequest || !reservationState.isOpen ||
                                             reservationState.isConfirmed
                                           }
                                           onClick={() =>
@@ -1106,7 +1121,7 @@ export default function EmployeeAccess() {
                     onClick={saveWeek}
                     disabled={
                       isSaving ||
-                      !reservationState.isOpen ||
+                      !reservationState.canRequest || !reservationState.isOpen ||
                       visibleSelectedIds.length === 0
                     }
                     className="flex h-13 w-full items-center justify-center gap-2 rounded-xl bg-[#0b3a82] px-5 text-sm font-bold text-white transition hover:bg-[#082d66] disabled:cursor-not-allowed disabled:opacity-50"
@@ -1130,7 +1145,7 @@ export default function EmployeeAccess() {
 
       {confirmationStep > 0 &&
         reservationState &&
-        !reservationState.isConfirmed && (
+        !reservationState.isConfirmed && reservationState.canRequest && (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
             role="dialog"

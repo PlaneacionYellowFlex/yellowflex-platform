@@ -6,7 +6,7 @@ import {
   EyeOff,
   LoaderCircle,
   LockKeyhole,
-  Mail,
+  UserRound,
   ShieldCheck,
 } from "lucide-react";
 import { FormEvent, useState } from "react";
@@ -17,7 +17,7 @@ type LoginResponse = {
     user: {
       id: string;
       name: string;
-      email: string;
+      email: string | null;
       roles: string[];
       passwordMustChange: boolean;
     };
@@ -40,7 +40,7 @@ function getDestination(roles: string[]) {
 export default function LoginPage() {
   const router = useRouter();
 
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -63,7 +63,7 @@ export default function LoginPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          email,
+          identifier,
           password,
         }),
       });
@@ -73,7 +73,7 @@ export default function LoginPage() {
       if (!response.ok || !result.data) {
         setError(
           result.error ??
-            "No fue posible iniciar sesión. Intenta nuevamente.",
+            "No fue posible iniciar sesiÃ³n. Intenta nuevamente.",
         );
         return;
       }
@@ -127,7 +127,7 @@ export default function LoginPage() {
             </h1>
 
             <p className="mt-7 max-w-lg text-lg leading-8 text-slate-500">
-              Operación, personas y servicios corporativos conectados
+              OperaciÃ³n, personas y servicios corporativos conectados
               dentro del ecosistema digital de YellowFlex.
             </p>
 
@@ -177,24 +177,24 @@ export default function LoginPage() {
               >
                 <div>
                   <label
-                    htmlFor="email"
+                    htmlFor="identifier"
                     className="text-sm font-bold text-slate-700"
                   >
-                    Correo corporativo
+                    Número de empleado o correo corporativo
                   </label>
 
                   <div className="relative mt-2">
-                    <Mail className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+                    <UserRound className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
 
                     <input
-                      id="email"
-                      type="email"
+                      id="identifier"
+                      type="text"
                       autoComplete="username"
-                      value={email}
+                      value={identifier}
                       onChange={(event) =>
-                        setEmail(event.target.value)
+                        setIdentifier(event.target.value)
                       }
-                      placeholder="nombre@yellowflex.com"
+                      placeholder="Ej. 0123 o nombre@yellow-flex.com"
                       disabled={loading}
                       required
                       className="h-12 w-full rounded-2xl border border-slate-200 bg-white pl-11 pr-4 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-[#0B3A82] focus:ring-4 focus:ring-blue-50 disabled:cursor-not-allowed disabled:bg-slate-50"
@@ -207,7 +207,7 @@ export default function LoginPage() {
                     htmlFor="password"
                     className="text-sm font-bold text-slate-700"
                   >
-                    Contraseña
+                    ContraseÃ±a
                   </label>
 
                   <div className="relative mt-2">
@@ -234,8 +234,8 @@ export default function LoginPage() {
                       disabled={loading}
                       aria-label={
                         showPassword
-                          ? "Ocultar contraseña"
-                          : "Mostrar contraseña"
+                          ? "Ocultar contraseÃ±a"
+                          : "Mostrar contraseÃ±a"
                       }
                       className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 transition hover:text-[#0B3A82]"
                     >
@@ -269,7 +269,7 @@ export default function LoginPage() {
                     </>
                   ) : (
                     <>
-                      Iniciar sesión
+                      Iniciar sesiÃ³n
                       <ArrowRight className="size-4" />
                     </>
                   )}
@@ -289,7 +289,7 @@ export default function LoginPage() {
             </div>
 
             <p className="mt-6 text-center text-xs text-slate-400">
-              YellowFlex Platform · Acceso corporativo
+              YellowFlex Platform Â· Acceso corporativo
             </p>
           </div>
         </section>

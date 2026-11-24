@@ -21,20 +21,9 @@ const updatePermissionsSchema = z
 
 async function requirePurchasePermissionsAdministrator() {
   const user = await requireCorporateUser();
-  const permission = await db.purchasePermission.findUnique({
-    where: { userId: user.id },
-    select: { canManagePurchases: true },
-  });
-
-  if (
-    !user.roles.some((role) => role === "ADMIN" || role === "DIRECCION") &&
-    !permission?.canManagePurchases
-  ) {
-    throw new CorporateAuthorizationRequired(
-      "No tienes permiso para administrar Compras.",
-    );
+  if (!user.roles.includes("ADMIN")) {
+    throw new CorporateAuthorizationRequired("Acceso restringido: los permisos especializados requieren ADMIN.");
   }
-
   return user;
 }
 

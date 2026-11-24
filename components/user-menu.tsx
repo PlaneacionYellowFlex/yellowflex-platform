@@ -134,7 +134,7 @@ export default function UserMenu({
                 </p>
 
                 <p className="mt-0.5 truncate text-xs text-slate-500">
-                  {user.email}
+                  {user.email ?? user.employee?.employeeNumber ?? "Sin correo"}
                 </p>
 
                 <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1 text-[10px] font-bold text-[#0b3a82]">

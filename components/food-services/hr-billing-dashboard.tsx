@@ -224,6 +224,12 @@ export default function HrBillingDashboard() {
     };
   }, [visibleOrders]);
 
+  useEffect(() => {
+    const refresh = () => { void loadBilling(); };
+    window.addEventListener("food-orders-changed", refresh);
+    return () => window.removeEventListener("food-orders-changed", refresh);
+  }, [loadBilling]);
+
   async function exportBilling() {
     if (!selectedWeekId || visibleOrders.length === 0) {
       setError(
@@ -231,6 +237,8 @@ export default function HrBillingDashboard() {
       );
       return;
     }
+
+    // Informational download: no payroll state transition or official batch.
 
     try {
       setIsExporting(true);
@@ -240,7 +248,7 @@ export default function HrBillingDashboard() {
         `/api/food-services/hr/billing/export?weekId=${encodeURIComponent(
           selectedWeekId,
         )}`,
-        { cache: "no-store" },
+        { method: "POST", cache: "no-store" },
       );
 
       if (!response.ok) {
@@ -350,10 +358,10 @@ export default function HrBillingDashboard() {
               </h2>
 
               <p className="mt-2 max-w-2xl text-sm leading-6 text-blue-100">
-                Cargos generados por pedidos
+                Importes comprometidos por pedidos
                 confirmados. La recolección del
                 alimento no modifica el importe a
-                nómina.
+                nómina. La descarga es informativa: no cambia estados ni acredita descuentos.
               </p>
             </div>
 
@@ -378,7 +386,7 @@ export default function HrBillingDashboard() {
 
                 {isExporting
                   ? "Generando..."
-                  : "Exportar Excel"}
+                  : "Descargar reporte Excel"}
               </button>
 
               <button
@@ -461,7 +469,7 @@ export default function HrBillingDashboard() {
           />
 
           <Kpi
-            label="Total a nómina"
+            label="Importe comprometido"
             value={money(periodTotals.amount)}
             icon={
               <Banknote className="size-5" />
@@ -747,7 +755,7 @@ export default function HrBillingDashboard() {
 
                                             <p className="mt-1 text-sm font-black text-[#0B3A82]">
                                               {money(
-                                                service.menuPrice,
+                                                order.unitPrice,
                                               )}
                                             </p>
                                           </div>

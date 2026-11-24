@@ -1,3 +1,5 @@
+import { requireModulePermission, requireRhPermission } from "@/lib/cpanel/module-access";
+import { CorporateAuthenticationRequired, CorporateAuthorizationRequired } from "@/lib/auth/corporate-auth";
 import { NextRequest, NextResponse } from "next/server";
 
 import { requireCorporateUser } from "@/lib/auth/corporate-auth";
@@ -61,6 +63,7 @@ export async function GET(request: NextRequest) {
     const isHr = user.roles.includes("RH") || user.roles.includes("ADMIN");
 
     if (scope === "all") {
+      await requireRhPermission("view");
       if (!isHr) return apiError("Solo Recursos Humanos puede consultar todas las solicitudes.", 403);
       const requests = await db.hrRequest.findMany({
         include: includeRequest,
@@ -69,6 +72,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ requests });
     }
 
+    await requireModulePermission("my-rh", "view");
     if (scope === "team") {
       const reportsToCurrentUser = user.employee?.id
         ? { OR: [{ managerId: user.employee.id }, { managerUserId: user.id }] }
@@ -119,6 +123,8 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
+    if (error instanceof CorporateAuthenticationRequired) return apiError(error.message, 401);
+    if (error instanceof CorporateAuthorizationRequired) return apiError("Acceso restringido", 403);
     console.error("GET /api/hr/requests", error);
     return apiError("No fue posible consultar las solicitudes.", 500);
   }
@@ -126,6 +132,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    await requireModulePermission("my-rh", "operate");
     const user = await requireCorporateUser();
     if (!user.employee?.id) {
       return apiError("Tu cuenta corporativa no está vinculada a un colaborador de RH.", 409);
@@ -219,6 +226,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ request: created }, { status: 201 });
   } catch (error) {
+    if (error instanceof CorporateAuthenticationRequired) return apiError(error.message, 401);
+    if (error instanceof CorporateAuthorizationRequired) return apiError("Acceso restringido", 403);
     console.error("POST /api/hr/requests", error);
     return apiError("No fue posible crear la solicitud.", 500);
   }

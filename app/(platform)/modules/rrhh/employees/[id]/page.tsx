@@ -1,3 +1,6 @@
+import ModulePageAccess from "@/lib/cpanel/module-page-access";
+import { getModulePageUser } from "@/lib/cpanel/module-page-access";
+import CpanelAccessRestricted from "@/components/cpanel-access-restricted";
 import {
   ArrowLeft,
   BriefcaseBusiness,
@@ -37,6 +40,7 @@ type EmployeePageProps = {
 export default async function EmployeePage({
   params,
 }: EmployeePageProps) {
+  if (!(await getModulePageUser("rrhh"))) return <CpanelAccessRestricted moduleName="Recursos Humanos" />;
   const { id } = await params;
   const employee = await getEmployeeById(id);
 
@@ -190,7 +194,7 @@ export default async function EmployeePage({
                         .filter(Boolean)
                         .join(" · ")
                     : managerUser
-                      ? `Dirección · ${managerUser.email}`
+                      ? `Dirección · ${managerUser.email ?? "Sin correo"}`
                       : undefined
                 }
                 icon={UsersRound}
@@ -250,10 +254,10 @@ export default async function EmployeePage({
             <p className="mb-6 max-w-3xl text-sm leading-6 text-slate-500">
               Define quién autoriza directamente al colaborador. Los cambios quedan registrados con fecha, motivo y usuario responsable.
             </p>
-            <EmployeeHierarchyForm
+            <ModulePageAccess module="rrhh" action="manage"><EmployeeHierarchyForm
               employeeId={employee.id}
               currentManagerName={managerName}
-            />
+            /></ModulePageAccess>
           </InformationCard>
 
           <InformationCard
@@ -267,13 +271,13 @@ export default async function EmployeePage({
               quedará registrado en el historial laboral.
             </p>
 
-            <EmployeeMovementForm
+            <ModulePageAccess module="rrhh" action="operate"><EmployeeMovementForm
               employeeId={employee.id}
               employeeStatus={employee.status}
               currentPosition={employee.position}
               currentDepartmentId={employee.department.id}
               currentWorkShiftId={employee.workShift?.id ?? null}
-            />
+            /></ModulePageAccess>
           </InformationCard>
 
           <InformationCard
@@ -317,7 +321,7 @@ export default async function EmployeePage({
               corporativos correspondientes.
             </p>
 
-            <EmployeeProfileForm
+            <ModulePageAccess module="rrhh" action="operate"><EmployeeProfileForm
               employeeId={employee.id}
               initialData={{
                 birthDate: formatDateForInput(profile?.birthDate),
@@ -327,7 +331,7 @@ export default async function EmployeePage({
                 email: profile?.email ?? "",
                 transportRoute: profile?.transportRoute ?? "",
               }}
-            />
+            /></ModulePageAccess>
           </InformationCard>
 
           {employee.status === "INACTIVE" && (
@@ -354,7 +358,7 @@ export default async function EmployeePage({
         </div>
 
         <aside className="space-y-6">
-          <EmployeeCredentialCard
+          <ModulePageAccess module="rrhh" action="manage"><EmployeeCredentialCard
             employeeId={employee.id}
             employeeStatus={employee.status}
             pinMustChange={employee.pinMustChange}
@@ -363,7 +367,7 @@ export default async function EmployeePage({
                 ? employee.pinUpdatedAt.toISOString()
                 : null
             }
-          />
+          /></ModulePageAccess>
 
           <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#b27f00]">
@@ -550,7 +554,7 @@ type EmployeeMovementRecord = {
   registeredBy: {
     id: string;
     name: string;
-    email: string;
+    email: string | null;
   } | null;
   createdAt: Date;
 };

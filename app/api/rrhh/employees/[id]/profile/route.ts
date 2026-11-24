@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { apiError } from "@/lib/api-response";
-import { requireCorporateRole } from "@/lib/auth/corporate-auth";
+import { requireRhPermission } from "@/lib/cpanel/module-access";
 import { updateEmployeeProfile } from "@/lib/rrhh/service";
 import { employeeProfileSchema } from "@/lib/rrhh/validation";
 
@@ -18,7 +18,7 @@ export async function PUT(
   context: RouteContext,
 ) {
   try {
-    await requireCorporateRole(["RH"]);
+    await requireRhPermission("operate");
     const { id } = await context.params;
     const input = employeeProfileSchema.parse(await request.json());
 

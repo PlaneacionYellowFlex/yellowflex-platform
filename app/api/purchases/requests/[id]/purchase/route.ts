@@ -1,3 +1,4 @@
+import { requireModulePermission } from "@/lib/cpanel/module-access";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -10,6 +11,7 @@ const schema = z.object({ purchasedAt: z.string().datetime().optional() }).stric
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    await requireModulePermission("purchases", "operate");
     const actor = await requireCorporateUser();
     const permissions = await getMyPurchasePermissions();
     const { id } = await context.params;

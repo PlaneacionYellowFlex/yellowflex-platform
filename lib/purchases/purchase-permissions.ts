@@ -5,6 +5,7 @@ import {
   requireCorporateUser,
 } from "@/lib/auth/corporate-auth";
 import { db } from "@/lib/db";
+import { hasCpanelPermission } from "@/lib/cpanel/authorization";
 
 export type PurchasePermissionKey =
   | "canRequest"
@@ -38,12 +39,24 @@ export async function getMyPurchasePermissions(): Promise<PurchasePermissions> {
 
   if (!record) return { ...NO_PERMISSIONS };
 
+  // C-PANEL es una segunda barrera. Nunca eleva privilegios heredados.
+  // Los permisos especializados de compras urgentes, aprobación y administración
+  // permanecen sujetos a su propio registro y controles de separación.
+  const [canViewModule, canOperateModule, canApproveModule, canManageModule] = user.roles.includes("ADMIN")
+    ? [true, true, true, true]
+    : await Promise.all([
+        hasCpanelPermission(user.id, "purchases", "view"),
+        hasCpanelPermission(user.id, "purchases", "operate"),
+        hasCpanelPermission(user.id, "purchases", "approve"),
+        hasCpanelPermission(user.id, "purchases", "manage"),
+      ]);
+
   return {
-    canRequest: record.canRequest,
-    canRequestUrgent: record.canRequest && record.canRequestUrgent,
-    canAuthorize: record.canAuthorize,
-    canViewAll: record.canViewAll,
-    canManagePurchases: record.canManagePurchases,
+    canRequest: canViewModule && canOperateModule && record.canRequest,
+    canRequestUrgent: canViewModule && canOperateModule && record.canRequest && record.canRequestUrgent,
+    canAuthorize: canViewModule && canOperateModule && canApproveModule && record.canAuthorize,
+    canViewAll: canViewModule && record.canViewAll,
+    canManagePurchases: canViewModule && canOperateModule && canManageModule && record.canManagePurchases,
   };
 }
 

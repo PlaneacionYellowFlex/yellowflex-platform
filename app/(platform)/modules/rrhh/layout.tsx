@@ -1,30 +1,5 @@
 import type { ReactNode } from "react";
-import { redirect } from "next/navigation";
-
-import {
-  CorporateAuthenticationRequired,
-  CorporateAuthorizationRequired,
-  requireCorporateRole,
-} from "@/lib/auth/corporate-auth";
-
-export default async function RrhhLayout({
-  children,
-}: {
-  children: ReactNode;
-}) {
-  try {
-    await requireCorporateRole(["RH"]);
-  } catch (error) {
-    if (error instanceof CorporateAuthenticationRequired) {
-      redirect("/login");
-    }
-
-    if (error instanceof CorporateAuthorizationRequired) {
-      redirect("/dashboard");
-    }
-
-    throw error;
-  }
-
-  return children;
+import ModulePageAccess from "@/lib/cpanel/module-page-access";
+export default function Layout({ children }: { children: ReactNode }) {
+  return <ModulePageAccess module="rrhh" action="view" area="">{children}</ModulePageAccess>;
 }
