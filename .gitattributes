@@ -1,0 +1,7 @@
+# YellowFlex Platform - proteccion de checksums Prisma (_prisma_migrations.checksum = SHA-256 del archivo).
+# Migraciones agregadas en la consolidacion 20261124: se guardan y extraen sin conversion de fin de linea.
+# Las migraciones historicas NO se listan: no se renormalizan ni cambia su extraccion.
+# Cada migracion nueva debe agregarse aqui con -text antes de su primer commit.
+prisma/migrations/20261102120000_cpanel_module_permissions/migration.sql -text
+prisma/migrations/20261104170000_operational_login_email_optional/migration.sql -text
+prisma/migrations/20261109120000_food_order_exceptional_cancellation/migration.sql -text
