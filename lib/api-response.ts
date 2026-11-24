@@ -69,9 +69,13 @@ export function apiError(error: unknown) {
   }
 
   if (error instanceof FoodServiceError) {
+    // Los errores de prenómina agregan un código estable y detalles verificables (sin datos sensibles).
+    const extra = error as FoodServiceError & { code?: string; details?: unknown };
     return NextResponse.json(
       {
         error: error.message,
+        ...(extra.code ? { code: extra.code } : {}),
+        ...(extra.details !== undefined ? { details: extra.details } : {}),
       },
       {
         status: error.status,

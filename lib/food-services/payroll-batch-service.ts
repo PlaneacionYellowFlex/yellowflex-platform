@@ -59,7 +59,7 @@ async function requireCreateAccess(actor: AuthenticatedUser, deps: Deps) {
 }
 
 // ------------------------------------------------------------------ carga masiva de candidatos
-const candidateInclude = {
+export const candidateInclude = {
   employee: {
     select: {
       id: true, employeeNumber: true, fullName: true, status: true, departmentId: true, workShiftId: true,
@@ -78,17 +78,17 @@ const candidateInclude = {
   payrollAssignments: { where: { status: "ACTIVE" as const }, select: { status: true } },
 };
 
-async function loadCandidates(client: Db, ids: readonly string[]) {
+export async function loadCandidates(client: Db, ids: readonly string[]) {
   const orders = await client.foodOrder.findMany({ where: { id: { in: [...ids] } }, include: candidateInclude });
   return new Map(orders.map(o => [o.id, o]));
 }
-type Candidate = Awaited<ReturnType<typeof loadCandidates>> extends Map<string, infer T> ? T : never;
+export type Candidate = Awaited<ReturnType<typeof loadCandidates>> extends Map<string, infer T> ? T : never;
 
-type Classified = {
+export type Classified = {
   orderId: string; cls: PreviewClass | "X"; reasons: PayrollEligibilityReason[]; fingerprint: string | null; order: Candidate | null;
 };
 
-function classify(order: Candidate | null, orderId: string, payrollReference: string): Classified {
+export function classify(order: Candidate | null, orderId: string, payrollReference: string): Classified {
   const result = evaluateFoodPayrollEligibility(order, payrollReference);
   if (!order) return { orderId, cls: "X", reasons: ["ORDER_NOT_FOUND"], fingerprint: null, order: null };
   const fingerprint = orderFingerprint(order);
@@ -98,7 +98,7 @@ function classify(order: Candidate | null, orderId: string, payrollReference: st
   return { orderId, cls: "X", reasons: result.reasons, fingerprint, order };
 }
 
-function describe(c: Classified) {
+export function describe(c: Classified) {
   const o = c.order;
   return {
     orderId: c.orderId,

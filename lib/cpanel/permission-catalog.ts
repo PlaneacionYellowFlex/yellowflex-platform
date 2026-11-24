@@ -29,6 +29,9 @@ export const cpanelActions = [
   "manage",
   "cancel-food-order",
   "create-payroll-batch",
+  "view-payroll-batches",
+  "void-payroll-batch",
+  "export-payroll-batch",
 ] as const;
 
 export type CpanelAction = (typeof cpanelActions)[number];
@@ -37,7 +40,9 @@ export type CpanelAction = (typeof cpanelActions)[number];
  * Acciones sensibles de Food Services: solo en el módulo food-services, solo para cuentas con rol RH
  * y sin acceso implícito para ADMIN (se verifican con hasCpanelPermission, que no tiene atajo).
  */
-export const foodRhOnlyActions = ["cancel-food-order", "create-payroll-batch"] as const;
+export const foodRhOnlyActions = [
+  "cancel-food-order", "create-payroll-batch", "view-payroll-batches", "void-payroll-batch", "export-payroll-batch",
+] as const;
 
 export function isFoodRhOnlyAction(value: string): boolean {
   return (foodRhOnlyActions as readonly string[]).includes(value);

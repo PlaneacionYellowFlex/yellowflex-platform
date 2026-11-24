@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, Loader2, ShieldCheck } from "lucide-react";
 
-type Action = "view" | "operate" | "approve" | "audit" | "manage" | "cancel-food-order";
+type Action = "view" | "operate" | "approve" | "audit" | "manage" | "cancel-food-order"
+  | "create-payroll-batch" | "view-payroll-batches" | "void-payroll-batch" | "export-payroll-batch";
+const foodOnlyActions: readonly Action[] = ["cancel-food-order", "create-payroll-batch", "view-payroll-batches", "void-payroll-batch", "export-payroll-batch"];
 type Permission = { moduleKey: string; actionKey: string; granted: boolean };
 type Audit = { id: string; moduleKey: string; actionKey: string; oldGranted: boolean | null; newGranted: boolean; reason: string | null; createdAt: string };
 type ResponseBody = { permissions?: Permission[]; audit?: Audit[]; scope?: "admin" | "rh"; error?: string };
@@ -21,6 +23,10 @@ const actions: { key: Action; label: string }[] = [
   { key: "approve", label: "Aprobar" }, { key: "audit", label: "Auditar" },
   { key: "manage", label: "Administrar" },
   { key: "cancel-food-order", label: "Cancelar pedido Food" },
+  { key: "view-payroll-batches", label: "Consultar prenómina" },
+  { key: "create-payroll-batch", label: "Generar prenómina" },
+  { key: "void-payroll-batch", label: "Anular prenómina" },
+  { key: "export-payroll-batch", label: "Exportar prenómina" },
 ];
 
 export default function CpanelPermissionEditor({ userId, userName }: { userId: string; userName: string }) {
@@ -88,12 +94,12 @@ export default function CpanelPermissionEditor({ userId, userName }: { userId: s
       </label>
       {loading ? <p className="mt-5 flex items-center gap-2 text-sm text-slate-500"><Loader2 className="size-4 animate-spin" />Consultando permisos...</p> : (
         <div className="mt-5 overflow-x-auto rounded-xl border border-slate-200">
-          <table className="w-full min-w-[650px] text-left text-sm">
+          <table className="w-full min-w-[980px] text-left text-sm">
             <thead className="bg-slate-50"><tr><th className="p-3 text-blue-950">Módulo</th>{actions.map((action) => <th key={action.key} className="p-3 text-center text-blue-950">{action.label}</th>)}</tr></thead>
             <tbody className="divide-y divide-slate-100">{modules.map(([key, label]) => (
               <tr key={key}><th className="p-3 font-semibold text-slate-700">{label}</th>{actions.map(({ key: actionKey }) => {
                 const checked = permissions.some((p) => p.moduleKey === key && p.actionKey === actionKey && p.granted);
-                const editable = (actionKey !== "cancel-food-order" || key === "food-services") && (scope === "admin" || ((actionKey === "view" || actionKey === "operate") && key !== "c-panel" && key !== "settings"));
+                const editable = (!foodOnlyActions.includes(actionKey) || key === "food-services") && (scope === "admin" || ((actionKey === "view" || actionKey === "operate") && key !== "c-panel" && key !== "settings"));
                 const cellKey = `${key}:${actionKey}`;
                 return <td key={actionKey} className="p-3 text-center"><input aria-label={`${label}: ${actionKey}`} type="checkbox" className="size-4 cursor-pointer accent-[#0b3a82]" checked={checked} disabled={busyKey !== null || !editable} onChange={(e) => void change(key, actionKey, e.target.checked)} />{busyKey === cellKey && <Loader2 className="ml-1 inline size-3 animate-spin" />}</td>;
               })}</tr>

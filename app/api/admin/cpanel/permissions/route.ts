@@ -69,7 +69,7 @@ export async function PATCH(request: Request) {
       if (isFoodRhOnlyAction(input.actionKey) && input.granted && !target.roles.some(r => r.role === "RH")) {
         return { status: 422, error: input.actionKey === "cancel-food-order"
           ? "La cancelación excepcional requiere rol RH"
-          : "La generación de prenómina requiere rol RH" } as const;
+          : "Las acciones de prenómina requieren rol RH" } as const;
       }
       const key = { userId: input.userId, moduleKey: input.moduleKey, actionKey: input.actionKey };
       const current = await tx.corporateModulePermission.findUnique({ where: { userId_moduleKey_actionKey: key } });
