@@ -6,3 +6,4 @@ prisma/migrations/20261102120000_cpanel_module_permissions/migration.sql -text
 prisma/migrations/20261104170000_operational_login_email_optional/migration.sql -text
 prisma/migrations/20261109120000_food_order_exceptional_cancellation/migration.sql -text
 prisma/migrations/20261124130000_food_payroll_core/migration.sql -text
+prisma/migrations/20261124180000_food_payroll_reconciliation/migration.sql -text

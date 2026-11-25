@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Download, Eye, FileSpreadsheet, Loader2, Search, ShieldCheck, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, Eye, FileSpreadsheet, Loader2, Scale, Search, ShieldCheck, XCircle } from "lucide-react";
 
-type Caps = { view: boolean; create: boolean; void: boolean; export: boolean };
+type Caps = { view: boolean; create: boolean; void: boolean; export: boolean; reconView?: boolean; reconcile?: boolean };
 type Row = {
   orderId: string; employeeId: string | null; employeeNumber: string | null; employeeName: string | null; employeeStatus: string | null;
   serviceWeekStart: string | null; quantity: number | null; historicalUnitPrice: string | null; committedAmount: string | null; reasons: string[];
@@ -49,13 +49,15 @@ const REASONS: Record<string, string> = {
 const STATUS: Record<string, { label: string; cls: string }> = {
   GENERATED: { label: "Generado", cls: "border-[#0B3A82]/30 bg-[#0B3A82]/5 text-[#0B3A82]" },
   EXPORTED: { label: "Exportado (pendiente de conciliar)", cls: "border-[#D6A800] bg-[#F4B400]/15 text-[#7a5a00]" },
-  PARTIALLY_RECONCILED: { label: "Conciliado parcialmente", cls: "border-emerald-300 bg-emerald-50 text-emerald-800" },
-  RECONCILED: { label: "Conciliado", cls: "border-emerald-400 bg-emerald-50 text-emerald-900" },
+  PARTIALLY_RECONCILED: { label: "Conciliación registrada (cierre pendiente)", cls: "border-emerald-300 bg-emerald-50 text-emerald-800" },
+  RECONCILED: { label: "Conciliado y cerrado", cls: "border-emerald-400 bg-emerald-50 text-emerald-900" },
   VOIDED: { label: "Anulado", cls: "border-slate-300 bg-slate-100 text-slate-600" },
 };
 const EVENTS: Record<string, string> = {
   BATCH_CREATED: "Lote generado", BATCH_REPLAYED: "Reintento idempotente", BATCH_REJECTED: "Solicitud rechazada", BATCH_VOIDED: "Lote anulado",
-  BATCH_EXPORTED: "Exportación oficial", ASSIGNMENT_RELEASED: "Asignaciones liberadas", RECONCILIATION_RECORDED: "Conciliación", ADJUSTMENT_RECORDED: "Ajuste",
+  BATCH_EXPORTED: "Exportación oficial", ASSIGNMENT_RELEASED: "Asignaciones liberadas", RECONCILIATION_RECORDED: "Conciliación registrada", ADJUSTMENT_RECORDED: "Ajustes registrados",
+  RECONCILIATION_REJECTED: "Conciliación rechazada", RECONCILIATION_REPLAYED: "Reintento de conciliación", RECONCILIATION_VOIDED: "Conciliación anulada",
+  BATCH_RECONCILED: "Cierre definitivo", ADJUSTMENT_RESOLVED: "Ajuste resuelto", CONTROL_EXPORTED: "Reporte de control",
 };
 const btn = "inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-50";
 const primary = `${btn} bg-[#0B3A82] text-white hover:bg-[#082d66]`;
@@ -135,6 +137,13 @@ export default function HrPayrollBatches() {
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // La conciliación, el cierre y la anulación de conciliación cambian el estado del lote: el historial se actualiza.
+  useEffect(() => {
+    const handler = () => { if (caps?.view) void loadHistory().catch(() => undefined); };
+    window.addEventListener("yf:payroll-changed", handler);
+    return () => window.removeEventListener("yf:payroll-changed", handler);
+  }, [caps, loadHistory]);
 
   useEffect(() => { if (!preview && !mass) return; const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, [preview, mass]);
   const secondsLeft = preview ? Math.max(0, Math.floor((Date.parse(preview.expiresAt) - now) / 1000)) : 0;
@@ -403,6 +412,8 @@ export default function HrPayrollBatches() {
             <button type="button" className={outline} disabled={busy !== null} onClick={() => void openDetail(b)}>{busy === `detail:${b.id}` ? <Loader2 className="size-4 animate-spin" /> : <Eye className="size-4" />}Detalle</button>
             {caps.export && b.status === "GENERATED" && <button type="button" className={gold} disabled={busy !== null} onClick={() => { setExportTarget(b); setExternalRef(""); }}><FileSpreadsheet className="size-4" />Exportar oficial</button>}
             {b.exportedAt && <button type="button" className={outline} disabled={busy !== null} onClick={() => void download(b)}>{busy === `download:${b.id}` ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}Descargar</button>}
+            {caps.reconView && ["EXPORTED", "PARTIALLY_RECONCILED", "RECONCILED"].includes(b.status) && <button type="button" className={primary} disabled={busy !== null}
+              onClick={() => window.dispatchEvent(new CustomEvent("yf:payroll-reconcile", { detail: b.id }))}><Scale className="size-4" />{b.status === "EXPORTED" && caps.reconcile ? "Conciliar" : "Ver conciliación"}</button>}
             {caps.void && b.status === "GENERATED" && <button type="button" className={`${btn} border border-red-200 bg-white text-red-700 hover:bg-red-50`} disabled={busy !== null} onClick={() => { setVoidTarget(b); setVoidReason(""); }}><XCircle className="size-4" />Anular</button>}
           </div>
         </li>)}</ul>}

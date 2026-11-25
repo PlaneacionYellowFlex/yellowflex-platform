@@ -74,10 +74,12 @@ test('prenómina Bloque B: permisos, selección, historial, anulación, exportac
     };
 
     // 01 capacidades granulares sin atajo ADMIN
-    assert.deepEqual(await ops.getPayrollCapabilities(rh.id, db), { view: true, create: true, void: true, export: true });
-    assert.deepEqual(await ops.getPayrollCapabilities(rhView.id, db), { view: true, create: false, void: false, export: false });
-    assert.deepEqual(await ops.getPayrollCapabilities(admin.id, db), { view: false, create: false, void: false, export: false });
-    assert.deepEqual(await ops.getPayrollCapabilities(rhNoManage.id, db), { view: false, create: false, void: false, export: false });
+    // C2 agrega cinco capacidades de conciliación: sin su permiso explícito deben ser false.
+    const C2_NONE = { reconView: false, reconcile: false, adjust: false, close: false, control: false };
+    assert.deepEqual(await ops.getPayrollCapabilities(rh.id, db), { view: true, create: true, void: true, export: true, ...C2_NONE });
+    assert.deepEqual(await ops.getPayrollCapabilities(rhView.id, db), { view: true, create: false, void: false, export: false, ...C2_NONE });
+    assert.deepEqual(await ops.getPayrollCapabilities(admin.id, db), { view: false, create: false, void: false, export: false, ...C2_NONE });
+    assert.deepEqual(await ops.getPayrollCapabilities(rhNoManage.id, db), { view: false, create: false, void: false, export: false, ...C2_NONE });
     scenario('capacidades granulares C-PANEL; ADMIN sin acceso implícito; manage obligatorio');
 
     // 02 búsqueda de pedidos con filtros por semana y colaborador

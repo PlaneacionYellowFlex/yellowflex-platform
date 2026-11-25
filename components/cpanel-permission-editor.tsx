@@ -4,8 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, Loader2, ShieldCheck } from "lucide-react";
 
 type Action = "view" | "operate" | "approve" | "audit" | "manage" | "cancel-food-order"
-  | "create-payroll-batch" | "view-payroll-batches" | "void-payroll-batch" | "export-payroll-batch";
-const foodOnlyActions: readonly Action[] = ["cancel-food-order", "create-payroll-batch", "view-payroll-batches", "void-payroll-batch", "export-payroll-batch"];
+  | "create-payroll-batch" | "view-payroll-batches" | "void-payroll-batch" | "export-payroll-batch"
+  | "view-payroll-reconciliations" | "register-payroll-reconciliation" | "manage-payroll-adjustments" | "close-payroll-batch" | "export-payroll-control";
 type Permission = { moduleKey: string; actionKey: string; granted: boolean };
 type Audit = { id: string; moduleKey: string; actionKey: string; oldGranted: boolean | null; newGranted: boolean; reason: string | null; createdAt: string };
 type ResponseBody = { permissions?: Permission[]; audit?: Audit[]; scope?: "admin" | "rh"; error?: string };
@@ -22,11 +22,19 @@ const actions: { key: Action; label: string }[] = [
   { key: "view", label: "Ver" }, { key: "operate", label: "Operar" },
   { key: "approve", label: "Aprobar" }, { key: "audit", label: "Auditar" },
   { key: "manage", label: "Administrar" },
+];
+/** Acciones sensibles exclusivas de Food Services y del rol RH (sin acceso implícito para ADMIN). */
+const foodActions: { key: Action; label: string }[] = [
   { key: "cancel-food-order", label: "Cancelar pedido Food" },
   { key: "view-payroll-batches", label: "Consultar prenómina" },
   { key: "create-payroll-batch", label: "Generar prenómina" },
   { key: "void-payroll-batch", label: "Anular prenómina" },
   { key: "export-payroll-batch", label: "Exportar prenómina" },
+  { key: "view-payroll-reconciliations", label: "Consultar conciliaciones" },
+  { key: "register-payroll-reconciliation", label: "Registrar conciliación" },
+  { key: "manage-payroll-adjustments", label: "Gestionar ajustes" },
+  { key: "close-payroll-batch", label: "Cerrar lote" },
+  { key: "export-payroll-control", label: "Exportar reportes de control" },
 ];
 
 export default function CpanelPermissionEditor({ userId, userName }: { userId: string; userName: string }) {
@@ -39,22 +47,26 @@ export default function CpanelPermissionEditor({ userId, userName }: { userId: s
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  const load = useCallback(async () => {
+  const fetchPermissions = useCallback(async () => {
     const response = await fetch(`/api/admin/cpanel/permissions?userId=${encodeURIComponent(userId)}`, { cache: "no-store", credentials: "same-origin" });
     const body = (await response.json()) as ResponseBody;
     if (!response.ok) throw new Error(response.status === 403 ? "Acceso restringido" : body.error ?? "No se pudieron consultar los permisos.");
+    return body;
+  }, [userId]);
+  const applyBody = (body: ResponseBody) => {
     setPermissions(body.permissions ?? []);
     setScope(body.scope ?? "rh");
     setAudit(body.audit ?? []);
-  }, [userId]);
+  };
+  const load = async () => applyBody(await fetchPermissions());
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    void load().catch((e: unknown) => { if (active) setError(e instanceof Error ? e.message : "Error al cargar."); })
+    void fetchPermissions().then((body) => { if (active) applyBody(body); })
+      .catch((e: unknown) => { if (active) setError(e instanceof Error ? e.message : "Error al cargar."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [load]);
+  }, [fetchPermissions]);
 
   async function change(moduleKey: string, actionKey: Action, granted: boolean) {
     if (busyKey) return;
@@ -94,17 +106,31 @@ export default function CpanelPermissionEditor({ userId, userName }: { userId: s
       </label>
       {loading ? <p className="mt-5 flex items-center gap-2 text-sm text-slate-500"><Loader2 className="size-4 animate-spin" />Consultando permisos...</p> : (
         <div className="mt-5 overflow-x-auto rounded-xl border border-slate-200">
-          <table className="w-full min-w-[980px] text-left text-sm">
+          <table className="w-full min-w-[720px] text-left text-sm">
             <thead className="bg-slate-50"><tr><th className="p-3 text-blue-950">Módulo</th>{actions.map((action) => <th key={action.key} className="p-3 text-center text-blue-950">{action.label}</th>)}</tr></thead>
             <tbody className="divide-y divide-slate-100">{modules.map(([key, label]) => (
               <tr key={key}><th className="p-3 font-semibold text-slate-700">{label}</th>{actions.map(({ key: actionKey }) => {
                 const checked = permissions.some((p) => p.moduleKey === key && p.actionKey === actionKey && p.granted);
-                const editable = (!foodOnlyActions.includes(actionKey) || key === "food-services") && (scope === "admin" || ((actionKey === "view" || actionKey === "operate") && key !== "c-panel" && key !== "settings"));
+                const editable = scope === "admin" || ((actionKey === "view" || actionKey === "operate") && key !== "c-panel" && key !== "settings");
                 const cellKey = `${key}:${actionKey}`;
                 return <td key={actionKey} className="p-3 text-center"><input aria-label={`${label}: ${actionKey}`} type="checkbox" className="size-4 cursor-pointer accent-[#0b3a82]" checked={checked} disabled={busyKey !== null || !editable} onChange={(e) => void change(key, actionKey, e.target.checked)} />{busyKey === cellKey && <Loader2 className="ml-1 inline size-3 animate-spin" />}</td>;
               })}</tr>
             ))}</tbody>
           </table>
+        </div>
+      )}
+      {!loading && (
+        <div className="mt-5 rounded-xl border border-slate-200 border-l-4 border-l-[#F4B400] p-4">
+          <h3 className="font-bold text-[#0b3a82]">Food Services · acciones sensibles (solo cuentas RH)</h3>
+          <p className="mt-1 text-xs text-slate-600">Prenómina, conciliación, ajustes y cierre. Se validan en la interfaz y en cada API; ADMIN no las obtiene de forma implícita.</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{foodActions.map(({ key: actionKey, label }) => {
+            const checked = permissions.some((p) => p.moduleKey === "food-services" && p.actionKey === actionKey && p.granted);
+            const cellKey = `food-services:${actionKey}`;
+            return <label key={actionKey} className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <input aria-label={`Food Services: ${actionKey}`} type="checkbox" className="size-4 cursor-pointer accent-[#0b3a82]" checked={checked} disabled={busyKey !== null || scope !== "admin"} onChange={(e) => void change("food-services", actionKey, e.target.checked)} />
+              {label}{busyKey === cellKey && <Loader2 className="ml-1 inline size-3 animate-spin" />}
+            </label>;
+          })}</div>
         </div>
       )}
       <div className="mt-6">

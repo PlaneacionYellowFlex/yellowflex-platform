@@ -5,7 +5,7 @@ import "server-only";
  * Capacidades granulares C-PANEL (sin atajo ADMIN), búsqueda de pedidos, consulta histórica,
  * anulación previa a exportación con liberación transaccional de asignaciones, exportación oficial
  * Excel con SHA-256 y descarga verificada. Exportar NO significa que el descuento se haya aplicado:
- * no cambia FoodOrder.payrollStatus ni concilia.
+ * no cambia FoodOrder.payrollStatus ni concilia. La conciliación y el cierre viven en payroll-reconciliation (C2).
  */
 import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
@@ -26,26 +26,28 @@ export const PAYROLL_ACTIONS = {
   create: "create-payroll-batch",
   void: "void-payroll-batch",
   export: "export-payroll-batch",
+  reconView: "view-payroll-reconciliations",
+  reconcile: "register-payroll-reconciliation",
+  adjust: "manage-payroll-adjustments",
+  close: "close-payroll-batch",
+  control: "export-payroll-control",
 } as const;
 export type PayrollCapability = keyof typeof PAYROLL_ACTIONS;
 export type PayrollCapabilities = Record<PayrollCapability, boolean>;
 
 /** RH activo, sin contraseña temporal, con view + manage de Food Services y la acción explícita. */
 export async function getPayrollCapabilities(userId: string, client: Db = defaultDb): Promise<PayrollCapabilities> {
-  const none = { view: false, create: false, void: false, export: false };
+  const none = Object.fromEntries(Object.keys(PAYROLL_ACTIONS).map(k => [k, false])) as PayrollCapabilities;
   const user = await client.user.findUnique({ where: { id: userId }, include: { roles: true } });
   if (!user?.active || user.passwordMustChange || !user.roles.some(r => r.role === "RH")) return none;
   const grants = new Set((await client.corporateModulePermission.findMany({
     where: { userId, moduleKey: "food-services", granted: true }, select: { actionKey: true },
   })).map(g => g.actionKey));
   if (!grants.has("view") || !grants.has("manage")) return none;
-  return {
-    view: grants.has(PAYROLL_ACTIONS.view), create: grants.has(PAYROLL_ACTIONS.create),
-    void: grants.has(PAYROLL_ACTIONS.void), export: grants.has(PAYROLL_ACTIONS.export),
-  };
+  return Object.fromEntries(Object.entries(PAYROLL_ACTIONS).map(([k, action]) => [k, grants.has(action)])) as PayrollCapabilities;
 }
 
-async function requireCapability(actor: AuthenticatedUser, capability: PayrollCapability, client: Db) {
+export async function requireCapability(actor: AuthenticatedUser, capability: PayrollCapability, client: Db) {
   if (!actor.roles.includes("RH") || !(await getPayrollCapabilities(actor.id, client))[capability]) {
     throw new CorporateAuthorizationRequired("Acceso restringido");
   }
@@ -102,8 +104,9 @@ export const batchFiltersSchema = z.object({
 const batchSummarySelect = {
   id: true, status: true, payrollReference: true, orderCount: true, employeeCount: true, serviceCount: true,
   committedAmount: true, currency: true, generatedAt: true, createdAt: true, exportedAt: true, fileName: true, fileSha256: true,
-  externalReference: true, voidedAt: true, voidReason: true,
+  externalReference: true, voidedAt: true, voidReason: true, closedAt: true, closeNote: true,
   createdBy: { select: { id: true, name: true } }, exportedBy: { select: { id: true, name: true } }, voidedBy: { select: { id: true, name: true } },
+  closedBy: { select: { id: true, name: true } },
 } satisfies Prisma.FoodPayrollBatchSelect;
 
 type BatchSummary = Prisma.FoodPayrollBatchGetPayload<{ select: typeof batchSummarySelect }>;
@@ -162,7 +165,7 @@ export async function getFoodPayrollBatch(actor: AuthenticatedUser, batchId: str
 }
 
 // ------------------------------------------------------------------ bloqueo del lote (después de los pedidos)
-async function lockBatch(tx: Prisma.TransactionClient, batchId: string) {
+export async function lockBatch(tx: Prisma.TransactionClient, batchId: string) {
   const rows = await tx.$queryRaw<Array<{ id: string }>>`SELECT "id" FROM "FoodPayrollBatch" WHERE "id" = ${batchId} FOR UPDATE`;
   if (!rows.length) throw new FoodPayrollBatchError("BATCH_NOT_FOUND", "Lote de prenómina no encontrado.", 404);
 }

@@ -28,6 +28,10 @@ model User {
   foodPayrollAuditEvents    FoodPayrollAuditEvent[] @relation("FoodPayrollAuditActor")
   foodPayrollReconciliations FoodPayrollReconciliation[] @relation("FoodPayrollReconciliationActor")
   foodPayrollAdjustments     FoodPayrollAdjustment[] @relation("FoodPayrollAdjustmentActor")
+  foodPayrollBatchesClosed   FoodPayrollBatch[] @relation("FoodPayrollBatchCloser")
+  foodPayrollReconciliationsVoided FoodPayrollReconciliation[] @relation("FoodPayrollReconciliationVoider")
+  foodPayrollAdjustmentsResolved FoodPayrollAdjustment[] @relation("FoodPayrollAdjustmentResolver")
+  foodPayrollAdjustmentsVoided FoodPayrollAdjustment[] @relation("FoodPayrollAdjustmentVoider")
   corporateSessions         CorporateSession[]
   employee                  Employee?                  @relation("CorporateUserEmployee")
   employeeMovements         EmployeeMovement[]         @relation("EmployeeMovementRegisteredBy")
@@ -165,6 +169,8 @@ model Employee {
   accessSessions   FoodAccessSession[]
   foodOrders       FoodOrder[]
   foodPayrollItems FoodPayrollBatchItem[]
+  foodPayrollReconciliationResults FoodPayrollReconciliationEmployee[]
+  foodPayrollAdjustments FoodPayrollAdjustment[]
   reservations     Reservation[]
   hrRequests       HrRequest[]
   vacationBalances VacationBalance[]
@@ -1146,6 +1152,34 @@ enum FoodPayrollAuditEventType {
   ASSIGNMENT_RELEASED
   RECONCILIATION_RECORDED
   ADJUSTMENT_RECORDED
+  RECONCILIATION_REJECTED
+  RECONCILIATION_REPLAYED
+  RECONCILIATION_VOIDED
+  BATCH_RECONCILED
+  ADJUSTMENT_RESOLVED
+  CONTROL_EXPORTED
+}
+
+/// Resultado conciliado por colaborador: importe aplicado por Nómina contra el esperado.
+enum FoodPayrollReconciliationResult {
+  COMPLETE
+  PARTIAL
+  NOT_APPLIED
+  OVER_APPLIED
+}
+
+enum FoodPayrollAdjustmentKind {
+  NOT_APPLIED
+  PARTIAL
+  OVER_APPLIED
+}
+
+enum FoodPayrollAdjustmentResolution {
+  RECOVERED
+  REFUNDED
+  COMPENSATED
+  CORRECTED
+  WAIVED
 }
 
 model FoodPayrollBatch {
@@ -1175,16 +1209,22 @@ model FoodPayrollBatch {
   voidedAt               DateTime?
   voidedById             String?
   voidReason             String?                @db.VarChar(500)
+  /// Cierre administrativo (RECONCILED). La liquidación económica de diferencias vive en los ajustes.
+  closedAt               DateTime?
+  closedById             String?
+  closeNote              String?                @db.VarChar(500)
   createdAt              DateTime               @default(now())
   updatedAt              DateTime               @updatedAt
   createdBy              User                   @relation("FoodPayrollBatchCreator", fields: [createdById], references: [id], onDelete: Restrict)
   exportedBy             User?                  @relation("FoodPayrollBatchExporter", fields: [exportedById], references: [id], onDelete: Restrict)
   voidedBy               User?                  @relation("FoodPayrollBatchVoider", fields: [voidedById], references: [id], onDelete: Restrict)
+  closedBy               User?                  @relation("FoodPayrollBatchCloser", fields: [closedById], references: [id], onDelete: Restrict)
   items                  FoodPayrollBatchItem[]
   services               FoodPayrollBatchItemService[]
   assignments            FoodPayrollAssignment[]
   reconciliations        FoodPayrollReconciliation[]
   adjustments            FoodPayrollAdjustment[]
+  reconciliationResults  FoodPayrollReconciliationEmployee[]
   auditEvents            FoodPayrollAuditEvent[]
 
   @@index([status, createdAt])
@@ -1298,29 +1338,85 @@ model FoodPayrollAuditEvent {
   @@index([eventType, createdAt])
 }
 
+/// Conciliación de un lote exportado: evidencia de lo aplicado por Nómina (archivo original y SHA-256).
+/// Una sola vigente por lote (índice único parcial "FoodPayrollReconciliation_one_active_per_batch").
 model FoodPayrollReconciliation {
-  id                 String                        @id @default(cuid())
-  batchId            String
-  status             FoodPayrollReconciliationStatus @default(RECEIVED)
-  externalReference  String?                       @db.VarChar(160)
-  receivedAmount     Decimal                       @db.Decimal(12, 2)
-  reconciledAmount   Decimal                       @default(0) @db.Decimal(12, 2)
-  unreconciledAmount Decimal                       @db.Decimal(12, 2)
-  differenceReason  String?                       @db.VarChar(1000)
-  evidenceReference String?                       @db.VarChar(500)
-  evidenceSha256     String?                       @db.VarChar(64)
-  evidenceContent    Bytes?
-  actorId            String
-  reconciledAt       DateTime                      @default(now())
-  createdAt          DateTime                      @default(now())
-  batch              FoodPayrollBatch              @relation(fields: [batchId], references: [id], onDelete: Restrict)
-  actor              User                          @relation("FoodPayrollReconciliationActor", fields: [actorId], references: [id], onDelete: Restrict)
-  items              FoodPayrollReconciliationItem[]
+  id                  String                          @id @default(cuid())
+  batchId             String
+  status              FoodPayrollReconciliationStatus @default(RECEIVED)
+  idempotencyKey      String                          @unique @db.VarChar(120)
+  requestHash         String                          @db.Char(64)
+  idempotencyResponse Json
+  contractVersion     Int
+  payrollReference    String                          @db.VarChar(40)
+  previewDigest       String                          @db.Char(64)
+  fileName            String                          @db.VarChar(255)
+  externalReference   String?                         @db.VarChar(160)
+  /// Importe esperado (total del lote) y aplicado por Nómina (suma del archivo).
+  expectedAmount      Decimal                         @db.Decimal(12, 2)
+  receivedAmount      Decimal                         @db.Decimal(12, 2)
+  /// Cubierto: suma por colaborador de min(aplicado, esperado).
+  reconciledAmount    Decimal                         @default(0) @db.Decimal(12, 2)
+  /// Pendiente de recuperar (esperado - cubierto) y pendiente de devolver (aplicado - cubierto).
+  unreconciledAmount  Decimal                         @db.Decimal(12, 2)
+  pendingRefundAmount Decimal                         @db.Decimal(12, 2)
+  employeeCount       Int
+  completeCount       Int
+  partialCount        Int
+  notAppliedCount     Int
+  overCount           Int
+  differenceReason    String?                         @db.VarChar(1000)
+  evidenceReference   String?                         @db.VarChar(500)
+  evidenceSha256      String                          @db.VarChar(64)
+  evidenceContent     Bytes
+  actorId             String
+  reconciledAt        DateTime                        @default(now())
+  closedAt            DateTime?
+  voidedAt            DateTime?
+  voidedById          String?
+  voidReason          String?                         @db.VarChar(500)
+  createdAt           DateTime                        @default(now())
+  batch               FoodPayrollBatch                @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  actor               User                            @relation("FoodPayrollReconciliationActor", fields: [actorId], references: [id], onDelete: Restrict)
+  voidedBy            User?                           @relation("FoodPayrollReconciliationVoider", fields: [voidedById], references: [id], onDelete: Restrict)
+  items               FoodPayrollReconciliationItem[]
+  employees           FoodPayrollReconciliationEmployee[]
+  adjustments         FoodPayrollAdjustment[]
 
   @@unique([id, batchId])
   @@index([batchId, reconciledAt])
+  @@index([batchId, voidedAt])
   @@index([externalReference])
   @@index([actorId, reconciledAt])
+}
+
+/// Resultado por colaborador (inmutable): el saldo se conserva a nivel colaborador, sin atribuir pagos a pedidos.
+model FoodPayrollReconciliationEmployee {
+  id               String                          @id @default(cuid())
+  reconciliationId String
+  batchId          String
+  employeeId       String
+  employeeNumber   String                          @db.VarChar(80)
+  employeeName     String                          @db.VarChar(200)
+  orderCount       Int
+  expectedAmount   Decimal                         @db.Decimal(12, 2)
+  appliedAmount    Decimal                         @db.Decimal(12, 2)
+  differenceAmount Decimal                         @db.Decimal(12, 2)
+  result           FoodPayrollReconciliationResult
+  sourceRow        Int
+  note             String?                         @db.VarChar(500)
+  createdAt        DateTime                        @default(now())
+  reconciliation   FoodPayrollReconciliation       @relation(fields: [reconciliationId, batchId], references: [id, batchId], onDelete: Restrict)
+  batch            FoodPayrollBatch                @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  employee         Employee                        @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  adjustments      FoodPayrollAdjustment[]
+
+  @@unique([reconciliationId, employeeId], map: "FoodPayrollReconEmployee_recon_employee_key")
+  @@unique([reconciliationId, employeeNumber], map: "FoodPayrollReconEmployee_recon_number_key")
+  @@unique([id, reconciliationId, batchId], map: "FoodPayrollReconEmployee_id_recon_batch_key")
+  @@index([reconciliationId, result])
+  @@index([batchId, employeeId])
+  @@index([employeeId])
 }
 
 model FoodPayrollReconciliationItem {
@@ -1341,31 +1437,64 @@ model FoodPayrollReconciliationItem {
   @@index([batchItemId])
 }
 
+/// Ajuste trazable por colaborador (diferencia de conciliación). PENDING -> APPLIED (resuelto) o VOIDED (solo si
+/// la conciliación se anuló). Una resolución parcial crea un ajuste sucesor con el saldo remanente.
 model FoodPayrollAdjustment {
-  id                 String                 @id @default(cuid())
-  batchId            String
-  batchItemId        String
-  orderId            String
-  status             FoodPayrollAdjustmentStatus @default(PENDING)
-  originalAmount     Decimal                @db.Decimal(12, 2)
-  adjustedAmount     Decimal                @db.Decimal(12, 2)
-  differenceAmount   Decimal                @db.Decimal(12, 2)
-  reason             String                 @db.VarChar(1000)
-  externalReference  String?                @db.VarChar(160)
-  evidenceReference  String?                @db.VarChar(500)
-  evidenceSha256     String?                @db.VarChar(64)
-  evidenceContent    Bytes?
-  actorId            String
-  createdAt          DateTime               @default(now())
-  appliedAt          DateTime?
-  batch              FoodPayrollBatch       @relation(fields: [batchId], references: [id], onDelete: Restrict)
-  batchItem          FoodPayrollBatchItem   @relation(fields: [batchItemId, orderId, batchId], references: [id, orderId, batchId], onDelete: Restrict)
-  actor              User                   @relation("FoodPayrollAdjustmentActor", fields: [actorId], references: [id], onDelete: Restrict)
+  id                       String                            @id @default(cuid())
+  batchId                  String
+  /// Sin uso desde C2 (CHECK): no se atribuyen pagos parciales a pedidos individuales.
+  batchItemId              String?
+  orderId                  String?
+  reconciliationId         String
+  reconciliationEmployeeId String
+  employeeId               String
+  employeeNumber           String                            @db.VarChar(80)
+  employeeName             String                            @db.VarChar(200)
+  kind                     FoodPayrollAdjustmentKind
+  status                   FoodPayrollAdjustmentStatus       @default(PENDING)
+  /// Esperado, aplicado y diferencia (aplicado - esperado) del colaborador en el lote original.
+  originalAmount           Decimal                           @db.Decimal(12, 2)
+  adjustedAmount           Decimal                           @db.Decimal(12, 2)
+  differenceAmount         Decimal                           @db.Decimal(12, 2)
+  /// Saldo de este ajuste: positivo = por recuperar del colaborador; negativo = por devolver o compensar.
+  balanceAmount            Decimal                           @db.Decimal(12, 2)
+  parentAdjustmentId       String?
+  reason                   String                            @db.VarChar(1000)
+  externalReference        String?                           @db.VarChar(160)
+  evidenceReference        String?                           @db.VarChar(500)
+  evidenceSha256           String?                           @db.VarChar(64)
+  evidenceContent          Bytes?
+  resolutionType           FoodPayrollAdjustmentResolution?
+  resolvedAmount           Decimal?                          @db.Decimal(12, 2)
+  resolutionReference      String?                           @db.VarChar(160)
+  resolutionNote           String?                           @db.VarChar(1000)
+  resolvedById             String?
+  voidedAt                 DateTime?
+  voidedById               String?
+  voidReason               String?                           @db.VarChar(500)
+  actorId                  String
+  createdAt                DateTime                          @default(now())
+  /// Fecha y hora de resolución.
+  appliedAt                DateTime?
+  batch                    FoodPayrollBatch                  @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  batchItem                FoodPayrollBatchItem?             @relation(fields: [batchItemId, orderId, batchId], references: [id, orderId, batchId], onDelete: Restrict)
+  reconciliation           FoodPayrollReconciliation         @relation(fields: [reconciliationId, batchId], references: [id, batchId], onDelete: Restrict)
+  reconciliationEmployee   FoodPayrollReconciliationEmployee @relation(fields: [reconciliationEmployeeId, reconciliationId, batchId], references: [id, reconciliationId, batchId], onDelete: Restrict, map: "FoodPayrollAdjustment_recon_employee_fkey")
+  employee                 Employee                          @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  parentAdjustment         FoodPayrollAdjustment?            @relation("FoodPayrollAdjustmentChain", fields: [parentAdjustmentId], references: [id], onDelete: Restrict)
+  successors               FoodPayrollAdjustment[]           @relation("FoodPayrollAdjustmentChain")
+  actor                    User                              @relation("FoodPayrollAdjustmentActor", fields: [actorId], references: [id], onDelete: Restrict)
+  resolvedBy               User?                             @relation("FoodPayrollAdjustmentResolver", fields: [resolvedById], references: [id], onDelete: Restrict)
+  voidedBy                 User?                             @relation("FoodPayrollAdjustmentVoider", fields: [voidedById], references: [id], onDelete: Restrict)
 
+  /// Además: índices únicos parciales "FoodPayrollAdjustment_one_root_per_employee" y "FoodPayrollAdjustment_one_successor".
   @@index([batchId, createdAt])
   @@index([orderId, createdAt])
   @@index([actorId, createdAt])
   @@index([status, createdAt])
+  @@index([reconciliationId, employeeId, status])
+  @@index([reconciliationEmployeeId])
+  @@index([employeeId, status])
 }
 
 model FoodOrderCancellation {

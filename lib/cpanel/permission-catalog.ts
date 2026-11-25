@@ -32,6 +32,11 @@ export const cpanelActions = [
   "view-payroll-batches",
   "void-payroll-batch",
   "export-payroll-batch",
+  "view-payroll-reconciliations",
+  "register-payroll-reconciliation",
+  "manage-payroll-adjustments",
+  "close-payroll-batch",
+  "export-payroll-control",
 ] as const;
 
 export type CpanelAction = (typeof cpanelActions)[number];
@@ -42,6 +47,7 @@ export type CpanelAction = (typeof cpanelActions)[number];
  */
 export const foodRhOnlyActions = [
   "cancel-food-order", "create-payroll-batch", "view-payroll-batches", "void-payroll-batch", "export-payroll-batch",
+  "view-payroll-reconciliations", "register-payroll-reconciliation", "manage-payroll-adjustments", "close-payroll-batch", "export-payroll-control",
 ] as const;
 
 export function isFoodRhOnlyAction(value: string): boolean {
