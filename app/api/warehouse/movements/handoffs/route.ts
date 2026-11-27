@@ -1,45 +1,21 @@
-import { requireModulePermission } from "@/lib/cpanel/module-access";
-import { hasCpanelPermission } from "@/lib/cpanel/authorization";
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 
 import { validateInventoryMovement } from "@/engines/warehouse";
-import { apiError } from "@/lib/api-response";
-import {
-  CorporateAuthorizationRequired,
-  requireCorporateUser,
-} from "@/lib/auth/corporate-auth";
+import { requireWarehouseCapability } from "@/lib/warehouse/access";
+import { missingIdempotencyKey, requireIdempotencyKey, warehouseApiError } from "@/lib/warehouse/api-error";
 import { InvalidWarehouseQuantityError, parseWarehouseQuantity } from "@/lib/warehouse-quantity";
 import {
-  createOperationalHandoff,
+  createOperationalHandoffOnce,
   InsufficientWarehouseStockError,
 } from "@/repositories/warehouse-custody.repository";
 import {
-  getInventoryBalances,
+  getInventoryBalancesByItem,
   getInventoryItemById,
   getWarehouseLocationById,
-  getWarehousePermission,
   listInventoryItems,
 } from "@/repositories/warehouse.repository";
 import { db } from "@/lib/db";
-
-async function requireWarehouseMovementAccess() {
-  const user = await requireCorporateUser();
-
-  if (user.roles.includes("ADMIN")) {
-    return user;
-  }
-
-  const permission = await getWarehousePermission(user.id);
-
-  if (!permission?.canRegisterMovement || !(await hasCpanelPermission(user.id, "warehouse", "operate"))) {
-    throw new CorporateAuthorizationRequired(
-      "No tienes permiso para registrar movimientos de Almacén.",
-    );
-  }
-
-  return user;
-}
 
 function movementFolio(date: Date) {
   const y = date.getFullYear();
@@ -57,14 +33,15 @@ function custodyFolio(date: Date) {
   return `CUS-${y}${m}${d}-${token}`;
 }
 
-export async function GET() {
+export async function GET(request?: Request) {
   try {
-    await requireModulePermission("warehouse", "view");
-    await requireWarehouseMovementAccess();
+    await requireWarehouseCapability("operate");
 
+    // YF-003 V2: los saldos se piden por artículo (?itemId=) en lugar de descargar todo el inventario artículo-ubicación.
+    const itemId = request?.url ? new URL(request.url).searchParams.get("itemId") : null;
     const [items, balances] = await Promise.all([
       listInventoryItems(),
-      getInventoryBalances(),
+      itemId ? getInventoryBalancesByItem(itemId) : Promise.resolve([]),
     ]);
 
     return NextResponse.json({
@@ -89,14 +66,16 @@ export async function GET() {
         })),
     });
   } catch (error) {
-    return apiError(error);
+    return warehouseApiError(error);
   }
 }
 
 export async function POST(request: Request) {
   try {
-    await requireModulePermission("warehouse", "operate");
-    const user = await requireWarehouseMovementAccess();
+    // Autorización antes de leer el cuerpo; la clave de idempotencia evita entregas duplicadas por doble clic o reintento.
+    const user = await requireWarehouseCapability("operate");
+    const idempotencyKey = requireIdempotencyKey(request);
+    if (!idempotencyKey) return missingIdempotencyKey();
     const body = await request.json();
 
     const itemId = typeof body.itemId === "string" ? body.itemId.trim() : "";
@@ -166,7 +145,10 @@ export async function POST(request: Request) {
 
     const occurredAt = new Date();
 
-    const result = await createOperationalHandoff({
+    const referenceType = typeof body.referenceType === "string" ? body.referenceType.trim() || null : null;
+    const referenceNumber = typeof body.referenceNumber === "string" ? body.referenceNumber.trim() || null : null;
+    const notes = typeof body.notes === "string" ? body.notes.trim() || null : null;
+    const { response, replayed } = await createOperationalHandoffOnce({
       movementFolio: movementFolio(occurredAt),
       custodyFolio: custodyFolio(occurredAt),
       itemId: item.id,
@@ -175,45 +157,43 @@ export async function POST(request: Request) {
       originLocationId: originLocation.id,
       warehouseAreaId: warehouseArea.id,
       productionAreaId: productionArea.id,
-      referenceType:
-        typeof body.referenceType === "string" ? body.referenceType : null,
-      referenceNumber:
-        typeof body.referenceNumber === "string" ? body.referenceNumber : null,
+      referenceType,
+      referenceNumber,
       reason: "Entrega operativa de Almacén a Producción",
-      notes: typeof body.notes === "string" ? body.notes : null,
+      notes,
       occurredAt,
       actorId: user.id,
-    });
-
-    return NextResponse.json(
-      {
-        movement: {
-          id: result.movement.id,
-          folio: result.movement.folio,
-        },
-        custody: {
-          id: result.custody.id,
-          folio: result.custody.folio,
-          status: result.custody.status,
-          custodianArea: result.custody.custodianArea.name,
-        },
-        item: {
-          id: item.id,
-          code: item.code,
-          description: item.description,
-          baseUnit: item.baseUnit,
-        },
-        origin: {
-          id: originLocation.id,
-          code: originLocation.code,
-          warehouseName: originLocation.warehouse.name,
-        },
-        quantity: quantity.toNumber(),
-        availableBefore: result.availableBefore,
-        availableAfter: result.availableBefore - quantity.toNumber(),
+    }, {
+      idempotencyKey,
+      payload: { itemId: item.id, originLocationId: originLocation.id, quantity: quantity.toFixed(3), referenceType, referenceNumber, notes },
+    }, result => ({
+      movement: {
+        id: result.movement.id,
+        folio: result.movement.folio,
       },
-      { status: 201 },
-    );
+      custody: {
+        id: result.custody.id,
+        folio: result.custody.folio,
+        status: result.custody.status,
+        custodianArea: result.custody.custodianArea.name,
+      },
+      item: {
+        id: item.id,
+        code: item.code,
+        description: item.description,
+        baseUnit: item.baseUnit,
+      },
+      origin: {
+        id: originLocation.id,
+        code: originLocation.code,
+        warehouseName: originLocation.warehouse.name,
+      },
+      quantity: quantity.toNumber(),
+      availableBefore: result.availableBefore,
+      availableAfter: result.availableBefore - quantity.toNumber(),
+    }));
+
+    return NextResponse.json({ ...response, replayed }, { status: replayed ? 200 : 201 });
   } catch (error) {
     if (error instanceof InsufficientWarehouseStockError) {
       return NextResponse.json(
@@ -226,6 +206,6 @@ export async function POST(request: Request) {
       );
     }
 
-    return apiError(error);
+    return warehouseApiError(error);
   }
 }

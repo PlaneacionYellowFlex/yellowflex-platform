@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { idempotentFetch } from "@/components/warehouse/idempotent-fetch";
 
 type Custody = {
   id: string;
@@ -90,7 +91,8 @@ export default function ProductionReceiptsPage() {
   }, []);
 
   useEffect(() => {
-    void load();
+    // La carga ocurre en una devolución asíncrona, no de forma síncrona dentro del efecto.
+    void Promise.resolve().then(() => load());
   }, [load]);
 
   function openReceipt(custody: Custody) {
@@ -103,26 +105,19 @@ export default function ProductionReceiptsPage() {
 
   async function receive(event: FormEvent) {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected || saving) return;
 
     setSaving(true);
     setError("");
     setSuccess("");
 
     try {
-      const response = await fetch(
-        `/api/warehouse/custodies/${selected.id}/receive`,
-        {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            receivedQuantity: Number(receivedQuantity),
-            notes,
-          }),
-        },
-      );
-      const body = await response.json();
+      // YF-003: la misma captura reutiliza la misma Idempotency-Key; un reintento no duplica la recepción.
+      const response = await idempotentFetch(`/api/warehouse/custodies/${selected.id}/receive`, {
+        receivedQuantity: receivedQuantity.trim(),
+        notes,
+      });
+      const body = response.body as { error?: string; custody: { folio: string } };
 
       if (!response.ok) {
         throw new Error(body.error || "No fue posible confirmar la recepción.");

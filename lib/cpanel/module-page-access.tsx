@@ -16,6 +16,6 @@ export async function getModulePageUser(module: CpanelModule, action: CpanelActi
 export default async function ModulePageAccess({ children, module, action = "view", area = "" }: {
   children: ReactNode; module: CpanelModule; action?: CpanelAction; area?: string;
 }) {
-  if (!(await getModulePageUser(module, action, area))) return <CpanelAccessRestricted moduleName={module} />;
+  if (!(await getModulePageUser(module, action, area))) return <CpanelAccessRestricted moduleName={module === "warehouse" ? "Almacén" : module} />;
   return <>{children}</>;
 }

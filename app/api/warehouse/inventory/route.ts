@@ -1,64 +1,55 @@
-import { requireModulePermission } from "@/lib/cpanel/module-access";
-import { hasCpanelPermission } from "@/lib/cpanel/authorization";
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { apiError } from "@/lib/api-response";
-import { CorporateAuthorizationRequired, requireCorporateUser } from "@/lib/auth/corporate-auth";
-import { getInventoryBalances, getWarehousePermission, listInventoryItems, listWarehouses } from "@/repositories/warehouse.repository";
+import { requireWarehouseCapability } from "@/lib/warehouse/access";
+import { getInventoryBalances, getInventoryTotals, listInventoryItems, listWarehouses } from "@/repositories/warehouse.repository";
 
-async function requireWarehouseInventoryAccess() {
-  const user = await requireCorporateUser();
-  if (user.roles.includes("ADMIN")) return user;
-  const permission = await getWarehousePermission(user.id);
-  if (!permission?.canViewInventory || !(await hasCpanelPermission(user.id, "warehouse", "view"))) {
-    throw new CorporateAuthorizationRequired("No tienes permiso para consultar el inventario de Almacén.");
-  }
-  return user;
-}
-
-export async function GET() {
+/**
+ * Inventario: totales por artículo y resumen. YF-003 V2: la consulta habitual lee totales de la existencia materializada;
+ * el detalle artículo-ubicación se pide con ?include=balances (o paginado en /api/warehouse/reports/stock).
+ */
+export async function GET(request?: Request) {
   try {
-    await requireModulePermission("warehouse", "view");
-    await requireWarehouseInventoryAccess();
-    const [items, warehouses, balances] = await Promise.all([
+    await requireWarehouseCapability("view");
+    const include = request?.url ? new URL(request.url).searchParams.get("include") : null;
+    const [items, warehouses, stock, balances] = await Promise.all([
       listInventoryItems(),
       listWarehouses(),
-      getInventoryBalances(),
+      getInventoryTotals(),
+      include === "balances" ? getInventoryBalances() : Promise.resolve(null),
     ]);
 
-    const totalsByItem = new Map<string, number>();
-    const locationsByItem = new Map<string, number>();
-    for (const balance of balances) {
-      totalsByItem.set(balance.itemId, (totalsByItem.get(balance.itemId) ?? 0) + balance.quantity);
-      locationsByItem.set(balance.itemId, (locationsByItem.get(balance.itemId) ?? 0) + 1);
-    }
+    // YF-003: totales con aritmética decimal exacta; un artículo inactivo con existencia se muestra marcado (no desaparece).
+    const totalsByItem = new Map<string, Prisma.Decimal>(stock.totals.map(t => [t.itemId, t.quantity]));
+    const locationsByItem = new Map<string, number>(stock.totals.map(t => [t.itemId, t.locations]));
 
-    const inventory = items.filter((item) => item.active).map((item) => ({
+    const inventory = items.filter((item) => item.active || !(totalsByItem.get(item.id)?.isZero() ?? true)).map((item) => ({
       id: item.id,
       code: item.code,
       description: item.description,
       unit: item.baseUnit,
-      quantity: totalsByItem.get(item.id) ?? 0,
+      quantity: totalsByItem.get(item.id)?.toNumber() ?? 0,
       locationCount: locationsByItem.get(item.id) ?? 0,
+      active: item.active,
     })).sort((a, b) => a.code.localeCompare(b.code));
 
     const activeLocations = warehouses.reduce(
       (total, warehouse) => total + warehouse.locations.filter((location) => location.active).length, 0
     );
-    const occupiedLocations = new Set(
-      balances.filter((balance) => balance.quantity !== 0).map((balance) => balance.locationId)
-    ).size;
+    const locations = warehouses.flatMap(w => w.locations.map(l => ({ id: l.id, code: l.code, warehouseCode: w.code, active: l.active && w.active })));
 
     return NextResponse.json({
       summary: {
         itemCount: inventory.length,
         locationCount: activeLocations,
-        occupiedLocationCount: occupiedLocations,
-        emptyLocationCount: Math.max(activeLocations - occupiedLocations, 0),
-        balanceCount: balances.length,
+        occupiedLocationCount: stock.occupiedLocationCount,
+        emptyLocationCount: Math.max(activeLocations - stock.occupiedLocationCount, 0),
+        balanceCount: stock.balanceCount,
       },
       inventory,
-      balances,
-    });
+      locations,
+      ...(balances ? { balances } : {}),
+    }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return apiError(error);
   }

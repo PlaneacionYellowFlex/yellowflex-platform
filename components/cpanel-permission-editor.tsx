@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, Loader2, ShieldCheck } from "lucide-react";
 
-type Action = "view" | "operate" | "approve" | "audit" | "manage" | "cancel-food-order"
+type Action = "view" | "operate" | "approve" | "audit" | "manage" | "manage-catalog" | "cancel-food-order"
   | "create-payroll-batch" | "view-payroll-batches" | "void-payroll-batch" | "export-payroll-batch"
   | "view-payroll-reconciliations" | "register-payroll-reconciliation" | "manage-payroll-adjustments" | "close-payroll-batch" | "export-payroll-control";
 type Permission = { moduleKey: string; actionKey: string; granted: boolean };
@@ -37,6 +37,17 @@ const foodActions: { key: Action; label: string }[] = [
   { key: "export-payroll-control", label: "Exportar reportes de control" },
 ];
 
+/** YF-003: permisos operativos de Almacén. RH delegado administra los ordinarios; los sensibles, solo ADMIN. Cada uno requiere además la concesión C-PANEL indicada. */
+type WarehouseFlag = "canViewInventory" | "canRegisterMovement" | "canManageWarehouse" | "canApproveWarehouseAdjustments" | "canImportInitial" | "canManageCatalog";
+const warehouseFlags: { key: WarehouseFlag; label: string; requires: string; sensitive?: boolean }[] = [
+  { key: "canViewInventory", label: "Consultar inventario", requires: "Almacén · Ver" },
+  { key: "canRegisterMovement", label: "Registrar movimientos y conteos", requires: "Almacén · Ver y Operar" },
+  { key: "canManageWarehouse", label: "Investigar diferencias, reconteos y reversos", requires: "Almacén · Ver y Operar", sensitive: true },
+  { key: "canApproveWarehouseAdjustments", label: "Aprobar ajustes de inventario", requires: "Almacén · Ver y Aprobar", sensitive: true },
+  { key: "canImportInitial", label: "Importar saldo inicial", requires: "Reservado", sensitive: true },
+  { key: "canManageCatalog", label: "Administrar catálogo (artículos y ubicaciones)", requires: "Almacén · Ver y C-PANEL Administrar catálogo", sensitive: true },
+];
+
 export default function CpanelPermissionEditor({ userId, userName }: { userId: string; userName: string }) {
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [scope, setScope] = useState<"admin" | "rh">("rh");
@@ -58,15 +69,22 @@ export default function CpanelPermissionEditor({ userId, userName }: { userId: s
     setScope(body.scope ?? "rh");
     setAudit(body.audit ?? []);
   };
-  const load = async () => applyBody(await fetchPermissions());
+  const [warehouse, setWarehouse] = useState<Record<WarehouseFlag, boolean> | null>(null);
+  const fetchWarehouse = useCallback(async () => {
+    const response = await fetch(`/api/admin/cpanel/warehouse-permissions?userId=${encodeURIComponent(userId)}`, { cache: "no-store", credentials: "same-origin" });
+    if (!response.ok) return null;
+    return ((await response.json()) as { flags: Record<WarehouseFlag, boolean> }).flags;
+  }, [userId]);
+  const load = async () => { applyBody(await fetchPermissions()); setWarehouse(await fetchWarehouse()); };
 
   useEffect(() => {
     let active = true;
+    void fetchWarehouse().then((flags) => { if (active) setWarehouse(flags); }).catch(() => undefined);
     void fetchPermissions().then((body) => { if (active) applyBody(body); })
       .catch((e: unknown) => { if (active) setError(e instanceof Error ? e.message : "Error al cargar."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [fetchPermissions]);
+  }, [fetchPermissions, fetchWarehouse]);
 
   async function change(moduleKey: string, actionKey: Action, granted: boolean) {
     if (busyKey) return;
@@ -88,6 +106,25 @@ export default function CpanelPermissionEditor({ userId, userName }: { userId: s
     } finally { setBusyKey(null); }
   }
 
+  async function changeWarehouse(flag: WarehouseFlag, granted: boolean) {
+    if (busyKey) return;
+    if (reason.trim().length < 5) { setError("Escribe un motivo de al menos cinco caracteres para auditar el cambio."); return; }
+    setBusyKey(`warehouse-flag:${flag}`);
+    setError(""); setSuccess("");
+    try {
+      const response = await fetch("/api/admin/cpanel/warehouse-permissions", {
+        method: "PATCH", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, flag, granted, reason: reason.trim() }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "No se pudo guardar el permiso de Almacén.");
+      await load();
+      setSuccess("Permiso de Almacén actualizado y cambio registrado en auditoría.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No fue posible guardar.");
+    } finally { setBusyKey(null); }
+  }
+
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
       <div className="flex items-start gap-3">
@@ -95,7 +132,7 @@ export default function CpanelPermissionEditor({ userId, userName }: { userId: s
         <div>
           <h2 className="text-xl font-bold text-[#0b3a82]">C-PANEL · Permisos corporativos</h2>
           <p className="mt-1 text-sm text-slate-600">{userName} · Permisos individuales, auditados y administrados por ADMIN o por RH con delegación expresa.</p>
-          <p className="mt-1 text-xs text-amber-800">Estos permisos todavía no sustituyen los controles operativos existentes de Compras y Almacén.</p>
+          <p className="mt-1 text-xs text-amber-800">En Compras, estos permisos todavía no sustituyen sus controles operativos. En Almacén se combinan con los permisos operativos de la sección inferior.</p>
         </div>
       </div>
       {error && <p role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
@@ -131,6 +168,27 @@ export default function CpanelPermissionEditor({ userId, userName }: { userId: s
               {label}{busyKey === cellKey && <Loader2 className="ml-1 inline size-3 animate-spin" />}
             </label>;
           })}</div>
+        </div>
+      )}
+      {!loading && warehouse && (
+        <div className="mt-5 rounded-xl border border-slate-200 border-l-4 border-l-[#0b3a82] p-4">
+          <h3 className="font-bold text-[#0b3a82]">Almacén · permisos operativos</h3>
+          <p className="mt-1 text-xs text-slate-600">Cada permiso exige además la concesión C-PANEL de Almacén indicada. Ningún rol (ADMIN o Dirección) los obtiene de forma implícita; nadie puede cambiar los suyos.{scope === "rh" ? " Como RH delegado administras los permisos ordinarios; los sensibles están reservados a ADMIN." : ""}</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{warehouseFlags.map(({ key, label, requires, sensitive }) => {
+            const cellKey = `warehouse-flag:${key}`;
+            const locked = scope !== "admin" && sensitive === true;
+            return <label key={key} className="flex cursor-pointer items-start gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-700 transition hover:border-blue-200 hover:bg-blue-50/50">
+              <input aria-label={`Almacén: ${label}`} type="checkbox" className="mt-0.5 size-4 cursor-pointer accent-[#0b3a82] disabled:cursor-not-allowed" checked={warehouse[key]} disabled={busyKey !== null || locked} onChange={(e) => void changeWarehouse(key, e.target.checked)} />
+              <span>{label}{busyKey === cellKey && <Loader2 className="ml-1 inline size-3 animate-spin" />}<span className="block text-[11px] text-slate-500">Requiere: {requires}{sensitive ? " · Sensible (ADMIN)" : ""}</span></span>
+            </label>;
+          })}</div>
+          <label className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-slate-700">
+            <input aria-label="C-PANEL Almacén: Administrar catálogo" type="checkbox" className="mt-0.5 size-4 cursor-pointer accent-[#0b3a82] disabled:cursor-not-allowed"
+              checked={permissions.some((p) => p.moduleKey === "warehouse" && p.actionKey === "manage-catalog" && p.granted)}
+              disabled={busyKey !== null || scope !== "admin"} onChange={(e) => void change("warehouse", "manage-catalog", e.target.checked)} />
+            <span>C-PANEL · Administrar catálogo de Almacén{busyKey === "warehouse:manage-catalog" && <Loader2 className="ml-1 inline size-3 animate-spin" />}
+              <span className="block text-[11px] text-slate-500">Sensible (solo ADMIN). No se concede por rol; debe acompañarse del permiso operativo «Administrar catálogo». Altas, ediciones e inactivaciones quedan en el historial del catálogo.</span></span>
+          </label>
         </div>
       )}
       <div className="mt-6">

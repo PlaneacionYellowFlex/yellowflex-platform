@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -15,22 +16,22 @@ function permissions(h, entries = [], legacy = {}) {
   return grants;
 }
 
-for (const module of ['purchases', 'warehouse', 'food-services', 'rrhh', 'my-rh']) {
-  test(`${module}: deny by default, view prerequisite, action separation, immediate revocation`, async () => {
+for (const moduleKey of ['purchases', 'warehouse', 'food-services', 'rrhh', 'my-rh']) {
+  test(`${moduleKey}: deny by default, view prerequisite, action separation, immediate revocation`, async () => {
     const h = harness({ roles: ['RH'] });
     const grants = permissions(h);
     const policy = h.load('lib/cpanel/module-access.ts');
     for (const action of ['view', 'operate', 'approve', 'audit', 'manage']) {
-      await assert.rejects(policy.requireModulePermission(module, action));
+      await assert.rejects(policy.requireModulePermission(moduleKey, action));
     }
-    grants.add(`${module}/operate`);
-    await assert.rejects(policy.requireModulePermission(module, 'operate'));
-    grants.add(`${module}/view`);
-    assert.equal((await policy.requireModulePermission(module, 'operate')).id, 'actor');
-    for (const action of ['approve', 'audit', 'manage']) await assert.rejects(policy.requireModulePermission(module, action));
-    grants.delete(`${module}/operate`);
-    await assert.rejects(policy.requireModulePermission(module, 'operate'));
-    assert.equal((await policy.requireModulePermission(module, 'view')).id, 'actor');
+    grants.add(`${moduleKey}/operate`);
+    await assert.rejects(policy.requireModulePermission(moduleKey, 'operate'));
+    grants.add(`${moduleKey}/view`);
+    assert.equal((await policy.requireModulePermission(moduleKey, 'operate')).id, 'actor');
+    for (const action of ['approve', 'audit', 'manage']) await assert.rejects(policy.requireModulePermission(moduleKey, action));
+    grants.delete(`${moduleKey}/operate`);
+    await assert.rejects(policy.requireModulePermission(moduleKey, 'operate'));
+    assert.equal((await policy.requireModulePermission(moduleKey, 'view')).id, 'actor');
     assert.deepEqual(h.calls.writes, []);
   });
 }
@@ -93,10 +94,10 @@ test('RH delegation is explicit and cannot change sensitive actions or govern it
   await assert.rejects(delegation.requireCpanelAdministrator());
   grants.add('c-panel/manage');
   assert.equal((await delegation.requireCpanelAdministrator()).scope, 'rh');
-  for (const module of ['purchases', 'warehouse', 'food-services', 'rrhh']) {
-    assert.equal(delegation.rhCanChange(module, 'view'), true);
-    assert.equal(delegation.rhCanChange(module, 'operate'), true);
-    for (const action of ['approve', 'audit', 'manage']) assert.equal(delegation.rhCanChange(module, action), false);
+  for (const moduleKey of ['purchases', 'warehouse', 'food-services', 'rrhh']) {
+    assert.equal(delegation.rhCanChange(moduleKey, 'view'), true);
+    assert.equal(delegation.rhCanChange(moduleKey, 'operate'), true);
+    for (const action of ['approve', 'audit', 'manage']) assert.equal(delegation.rhCanChange(moduleKey, action), false);
   }
   const api = h.load('app/api/admin/cpanel/permissions/route.ts');
   for (const input of [
@@ -165,9 +166,11 @@ test('Warehouse view grant cannot replace inventory-specific rights', async () =
   const h = harness({ roles: ['PRODUCCION'] });
   const grants = permissions(h, ['warehouse/view']);
   let inventoryRight = false;
+  // YF-003: el permiso operativo se lee en la política central (lib/warehouse/capabilities.ts) desde la tabla WarehousePermission.
+  h.db.warehousePermission.findUnique = async () => ({ canViewInventory: inventoryRight });
   h.mocks['@/repositories/warehouse.repository'] = {
-    getWarehousePermission: async () => ({ canViewInventory: inventoryRight }),
     getInventoryBalances: async () => [], listInventoryItems: async () => [], listWarehouses: async () => [],
+    getInventoryTotals: async () => ({ totals: [], occupiedLocationCount: 0, balanceCount: 0 }),
   };
   const route = h.load('app/api/warehouse/inventory/route.ts');
   assert.equal((await route.GET()).status, 403);

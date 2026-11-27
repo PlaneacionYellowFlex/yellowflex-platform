@@ -13,6 +13,8 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
+import { useSubmitGuard } from "@/components/warehouse/use-submit-guard";
+
 type Item = {
   id: string;
   code: string;
@@ -63,6 +65,7 @@ export default function WarehouseHandoffPage() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const guard = useSubmitGuard();
   const [error, setError] = useState("");
   const [result, setResult] = useState<HandoffResult | null>(null);
 
@@ -83,7 +86,6 @@ export default function WarehouseHandoffPage() {
 
         if (mounted) {
           setItems(body.items);
-          setBalances(body.balances);
         }
       } catch (loadError) {
         if (mounted) {
@@ -103,6 +105,20 @@ export default function WarehouseHandoffPage() {
       mounted = false;
     };
   }, []);
+
+  // YF-003 V2: existencias del artículo elegido (consulta por artículo, sin descargar todo el inventario).
+  useEffect(() => {
+    let active = true;
+    if (!itemId) {
+      void Promise.resolve().then(() => { if (active) setBalances([]); });
+      return () => { active = false; };
+    }
+    void fetch(`/api/warehouse/movements/handoffs?itemId=${encodeURIComponent(itemId)}`, { credentials: "same-origin", cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { balances: [] }))
+      .then((b: { balances?: Balance[] }) => { if (active) setBalances(b.balances ?? []); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [itemId]);
 
   const selectedItem = items.find((item) => item.id === itemId) ?? null;
 
@@ -138,23 +154,19 @@ export default function WarehouseHandoffPage() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!guard.begin()) return;
     setSaving(true);
     setError("");
     setResult(null);
 
+    const payload = { itemId, originLocationId, quantity: Number(quantity), referenceType, referenceNumber, notes };
+    const { key, fingerprint } = guard.key(payload);
     try {
       const response = await fetch("/api/warehouse/movements/handoffs", {
         method: "POST",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          itemId,
-          originLocationId,
-          quantity: Number(quantity),
-          referenceType,
-          referenceNumber,
-          notes,
-        }),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+        body: JSON.stringify(payload),
       });
 
       const body = await response.json();
@@ -162,6 +174,7 @@ export default function WarehouseHandoffPage() {
       if (!response.ok) {
         throw new Error(body.error || "No fue posible registrar la entrega.");
       }
+      guard.confirm(fingerprint);
 
       setResult(body);
       setBalances((current) =>
@@ -183,6 +196,7 @@ export default function WarehouseHandoffPage() {
           : "No fue posible registrar la entrega.",
       );
     } finally {
+      guard.end();
       setSaving(false);
     }
   }

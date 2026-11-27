@@ -1,52 +1,49 @@
-import { requireModulePermission } from "@/lib/cpanel/module-access";
-import { randomUUID } from "crypto";
-import { NextRequest,NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { WarehouseCountType } from "@prisma/client";
-import { apiError } from "@/lib/api-response";
-import { CorporateAuthenticationRequired, CorporateAuthorizationRequired, requireCorporateUser } from "@/lib/auth/corporate-auth";
-import { hasCpanelPermission } from "@/lib/cpanel/authorization";
-import { getInventoryBalances, getWarehousePermission } from "@/repositories/warehouse.repository";
-import { createWarehouseCount,listWarehouseCounts,WarehouseCountError } from "@/repositories/warehouse-counts.repository";
+import { getWarehouseCapabilities, requireWarehouseCapability } from "@/lib/warehouse/access";
+import { idempotentResponse, invalidBody, missingIdempotencyKey, readJsonObject, requireIdempotencyKey, warehouseApiError } from "@/lib/warehouse/api-error";
+import { warehouseFolio } from "@/lib/warehouse/folio";
+import { stockPage } from "@/repositories/warehouse-reporting.repository";
+import { createWarehouseCountOnce, listWarehouseCounts } from "@/repositories/warehouse-counts.repository";
 
-const folio=()=>`CNT-${new Date().toISOString().slice(0,10).replaceAll("-","")}-${randomUUID().replaceAll("-","").slice(0,10).toUpperCase()}`;
-
-async function requireCountOperationAccess() {
- const user=await requireCorporateUser();
- if(user.roles.includes("ADMIN"))return user;
- const [permission, allowed] = await Promise.all([getWarehousePermission(user.id), hasCpanelPermission(user.id, "warehouse", "operate")]);
- if(permission?.canRegisterMovement && allowed)return user;
- throw new CorporateAuthorizationRequired("No tienes permiso para registrar conteos de Almacén.");
+export async function GET(request?: Request) {
+  try {
+    const user = await requireWarehouseCapability("view");
+    const caps = await getWarehouseCapabilities(user.id, undefined, user.roles);
+    // YF-003 V2: candidatos buscados en el servidor (?q=), 60 por consulta, desde la existencia materializada.
+    const q = request?.url ? new URL(request.url).searchParams.get("q")?.trim().slice(0, 80) || null : null;
+    const [counts, page] = await Promise.all([listWarehouseCounts(), stockPage({ search: q }, null, 60)]);
+    const balances = page.rows;
+    return NextResponse.json({
+      canOperate: caps.operate,
+      counts: counts.map(c => ({
+        id: c.id, folio: c.folio, type: c.type, status: c.status, launchedAt: c.launchedAt,
+        expectedQuantity: Number(c.expectedQuantity), countedQuantity: c.countedQuantity === null ? null : Number(c.countedQuantity), difference: c.difference === null ? null : Number(c.difference),
+        item: { code: c.item.code, description: c.item.description, unit: c.item.baseUnit }, location: { code: c.location.code, name: c.location.name },
+      })),
+      // Candidatos: existencias positivas en ubicaciones y artículos activos.
+      candidates: balances.filter(b => b.itemActive && b.locationActive && Number(b.quantity) > 0).map(b => ({
+        itemId: b.itemId, itemCode: b.itemCode, itemDescription: b.itemDescription, unit: b.unit, locationId: b.locationId, locationCode: b.locationCode, locationName: b.locationCode,
+      })),
+    }, { headers: { "Cache-Control": "no-store" } });
+  } catch (e) { return warehouseApiError(e); }
 }
 
-export async function GET(){
- try{
-    await requireModulePermission("warehouse", "view");
-  const user = await requireCorporateUser();
-  if (!user.roles.includes("ADMIN")) {
-    const [permission, allowed] = await Promise.all([
-      getWarehousePermission(user.id),
-      hasCpanelPermission(user.id, "warehouse", "view"),
-    ]);
-    if (!permission?.canViewInventory || !allowed) {
-      throw new CorporateAuthorizationRequired("Acceso restringido: conteos físicos de Almacén.");
-    }
-  }
-  const operationPermission = await getWarehousePermission(user.id);
-  const canOperate = user.roles.includes("ADMIN") || (operationPermission?.canRegisterMovement === true && await hasCpanelPermission(user.id, "warehouse", "operate"));
-  const [counts,balances]=await Promise.all([listWarehouseCounts(),getInventoryBalances()]);
-  return NextResponse.json({
-   canOperate,
-   counts:counts.map(c=>({id:c.id,folio:c.folio,type:c.type,status:c.status,expectedQuantity:Number(c.expectedQuantity),countedQuantity:c.countedQuantity===null?null:Number(c.countedQuantity),difference:c.difference===null?null:Number(c.difference),item:{code:c.item.code,description:c.item.description,unit:c.item.baseUnit},location:{code:c.location.code,name:c.location.name}})),
-   candidates:balances.filter(b=>b.quantity>0).map(b=>({itemId:b.itemId,itemCode:b.itemCode,itemDescription:b.itemDescription,unit:b.baseUnit,locationId:b.locationId,locationCode:b.locationCode,locationName:b.locationName}))
-  });
- }catch(e){if(e instanceof CorporateAuthenticationRequired||e instanceof CorporateAuthorizationRequired)return apiError(e);return NextResponse.json({error:e instanceof Error?e.message:"No fue posible consultar conteos."},{status:500});}
-}
-export async function POST(req:NextRequest){
- try{
-    await requireModulePermission("warehouse", "operate");
-  const user=await requireCountOperationAccess(); const b=await req.json();
-  if(!b.itemId||!b.locationId)return NextResponse.json({error:"Artículo y ubicación son obligatorios."},{status:400});
-  const c=await createWarehouseCount({folio:folio(),itemId:b.itemId,locationId:b.locationId,type:b.type==="SURPRISE"?WarehouseCountType.SURPRISE:WarehouseCountType.CYCLE,notes:b.notes,actorId:user.id});
-  return NextResponse.json({id:c.id,folio:c.folio},{status:201});
- }catch(e){if(e instanceof CorporateAuthenticationRequired||e instanceof CorporateAuthorizationRequired)return apiError(e);return NextResponse.json({error:e instanceof Error?e.message:"No fue posible iniciar."},{status:e instanceof WarehouseCountError?400:500});}
+export async function POST(req: NextRequest) {
+  try {
+    // Autorización antes de leer el cuerpo. Un segundo conteo abierto del mismo artículo y ubicación se rechaza (409).
+    const user = await requireWarehouseCapability("operate");
+    const idempotencyKey = requireIdempotencyKey(req);
+    if (!idempotencyKey) return missingIdempotencyKey();
+    const b = await readJsonObject(req);
+    if (!b || typeof b.itemId !== "string" || typeof b.locationId !== "string" || !b.itemId || !b.locationId) return invalidBody("Artículo y ubicación son obligatorios.");
+    const type = b.type === "SURPRISE" ? WarehouseCountType.SURPRISE : WarehouseCountType.CYCLE;
+    const notes = typeof b.notes === "string" ? b.notes.trim() : "";
+    const result = await createWarehouseCountOnce(
+      { folio: warehouseFolio("CNT"), itemId: b.itemId, locationId: b.locationId, type, notes, actorId: user.id },
+      { idempotencyKey, payload: { itemId: b.itemId, locationId: b.locationId, type, notes } },
+      c => ({ id: c.id, folio: c.folio, expectedQuantity: c.expectedQuantity.toString() }),
+    );
+    return idempotentResponse(result);
+  } catch (e) { return warehouseApiError(e); }
 }

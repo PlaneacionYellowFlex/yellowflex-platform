@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { apiError } from "@/lib/api-response";
 import { requireCpanelAdministrator, rhCanChange } from "@/lib/cpanel/delegation";
-import { cpanelActions, cpanelModules, isFoodRhOnlyAction } from "@/lib/cpanel/permission-catalog";
+import { cpanelActions, cpanelModules, isFoodRhOnlyAction, isWarehouseOnlyAction } from "@/lib/cpanel/permission-catalog";
 import { db } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -42,14 +42,18 @@ export async function PATCH(request: Request) {
   try {
     const { actor, scope } = await requireCpanelAdministrator();
     const input = changeSchema.parse(await request.json());
-    if (input.userId === actor.id && input.moduleKey === "c-panel") {
-      return NextResponse.json({ error: "No puedes cambiar tus propios permisos C-PANEL" }, { status: 403 });
+    // YF-003: nadie modifica sus propios permisos (de ningún módulo); evita autoasignaciones de permisos sensibles.
+    if (input.userId === actor.id) {
+      return NextResponse.json({ error: "No puedes cambiar tus propios permisos; solicita el cambio a otro administrador." }, { status: 403 });
     }
     if (scope === "rh" && (!rhCanChange(input.moduleKey, input.actionKey) || input.userId === actor.id)) {
       return NextResponse.json({ error: "Esta autorización está reservada a Dirección/ADMIN" }, { status: 403 });
     }
     if (isFoodRhOnlyAction(input.actionKey) && input.moduleKey !== "food-services") {
       return NextResponse.json({ error: "Acción exclusiva de Food Services" }, { status: 422 });
+    }
+    if (isWarehouseOnlyAction(input.actionKey) && input.moduleKey !== "warehouse") {
+      return NextResponse.json({ error: "Acción exclusiva de Almacén" }, { status: 422 });
     }
     const result = await db.$transaction(async (tx) => {
       const target = await tx.user.findUnique({

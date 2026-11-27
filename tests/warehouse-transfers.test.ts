@@ -141,6 +141,8 @@ test("internal transfer idempotency integration against isolated PostgreSQL", {
         return await run(fixture);
       } finally {
         await db.$transaction(async (tx) => {
+          // YF-003 V2: historiales append-only; la limpieza declara los marcadores sintéticos de esta prueba (artículo y actor QA).
+          await tx.$executeRawUnsafe("SELECT set_config('yellowflex.fixture_cleanup', $1, true)", `${marker},QA-TRANSFER-${runId}`);
           if (fixture.operationKeys.length) {
             await tx.warehouseStockOperation.deleteMany({ where: { operationKey: { in: fixture.operationKeys } } });
           }

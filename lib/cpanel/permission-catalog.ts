@@ -27,6 +27,7 @@ export const cpanelActions = [
   "approve",
   "audit",
   "manage",
+  "manage-catalog",
   "cancel-food-order",
   "create-payroll-batch",
   "view-payroll-batches",
@@ -52,6 +53,12 @@ export const foodRhOnlyActions = [
 
 export function isFoodRhOnlyAction(value: string): boolean {
   return (foodRhOnlyActions as readonly string[]).includes(value);
+}
+
+/** YF-003 V2: administración del catálogo de Almacén. Sensible, exclusiva del módulo warehouse, solo la concede ADMIN. */
+export const warehouseOnlyActions = ["manage-catalog"] as const;
+export function isWarehouseOnlyAction(value: string): boolean {
+  return (warehouseOnlyActions as readonly string[]).includes(value);
 }
 
 export type CpanelPermission = Readonly<{

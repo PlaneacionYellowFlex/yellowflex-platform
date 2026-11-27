@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { payloadHash } from "@/lib/warehouse-idempotency";
 import { internalTransferKind } from "@/lib/warehouse-movement-idempotency";
 import { isSerializationConflict, isUniqueConflict } from "@/lib/warehouse-idempotency";
+import { assertActiveCatalog } from "@/repositories/warehouse-catalog-guard";
 import { getWarehouseStockBalance, lockWarehouseStock } from "@/repositories/warehouse-stock-lock";
 
 type InboundInventoryMovementType = Extract<
@@ -92,7 +93,29 @@ export async function createWarehouseMovement(
     throw new Error("Los movimientos de egreso deben usar el repositorio transaccional protegido.");
   }
 
-  return db.inventoryMovement.create({
+  return createInboundMovement(db, data);
+}
+
+/** YF-003: entrada externa exactamente una vez por Idempotency-Key (doble clic, reintento o concurrencia). */
+export async function createExternalReceiptOnce<R extends Record<string, unknown>>(
+  data: CreateWarehouseMovementData & { type: "EXTERNAL_RECEIPT"; destinationLocationId: string },
+  operation: { idempotencyKey: string; payload: Record<string, unknown> },
+  toResponse: (movement: Awaited<ReturnType<typeof createInboundMovement>>) => R,
+) {
+  if (data.originLocationId) throw new Error("Una entrada externa no tiene ubicación de origen.");
+  const { runStockOperationOnce } = await import("@/repositories/warehouse-stock-operation.repository");
+  return runStockOperationOnce({
+    kind: "EXTERNAL_RECEIPT", actorId: data.actorId, idempotencyKey: operation.idempotencyKey, payload: operation.payload,
+    lock: { itemId: data.itemId, locationId: data.destinationLocationId }, occurredAt: data.occurredAt,
+  }, async tx => {
+    // YF-003 V2: artículo y ubicación activos verificados dentro de la transacción (bloqueo compartido de catálogo).
+    await assertActiveCatalog(tx, data.itemId, [data.destinationLocationId]);
+    return toResponse(await createInboundMovement(tx, data));
+  });
+}
+
+function createInboundMovement(client: Prisma.TransactionClient | typeof db, data: CreateWarehouseMovementData) {
+  return client.inventoryMovement.create({
     data: {
       folio: data.folio,
       itemId: data.itemId,
@@ -163,6 +186,8 @@ export async function createInternalTransfer(data: CreateInternalTransferData) {
         });
         if (previous) return readPriorTransfer(previous, requestHash);
 
+        // YF-003 V2: catálogo activo verificado dentro de la transacción (origen y destino).
+        await assertActiveCatalog(tx, data.itemId, [data.originLocationId, data.destinationLocationId]);
         const available = await getWarehouseStockBalance(tx, data.itemId, data.originLocationId);
         if (available.lessThan(data.quantity)) {
           throw new InsufficientWarehouseTransferStockError(available, data.quantity, data.unit, data.originLocationCode);

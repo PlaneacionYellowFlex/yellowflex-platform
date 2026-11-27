@@ -94,6 +94,8 @@ test("production custody consumption idempotency against PostgreSQL", {
         return await run(custody.id);
       } finally {
         await db.$transaction(async (tx) => {
+          // YF-003 V2: historiales append-only; solo se eliminan registros del marcador sintético de esta prueba.
+          await tx.$executeRawUnsafe("SELECT set_config('yellowflex.fixture_cleanup', $1, true)", marker);
           await tx.inventoryCustodyOperation.deleteMany({ where: { custodyId: custody.id } });
           await tx.inventoryCustodyEvent.deleteMany({ where: { custodyId: custody.id } });
           await tx.inventoryCustody.delete({ where: { id: custody.id } });

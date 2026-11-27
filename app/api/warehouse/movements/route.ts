@@ -1,41 +1,18 @@
-import { requireModulePermission } from "@/lib/cpanel/module-access";
-import { hasCpanelPermission } from "@/lib/cpanel/authorization";
 import { randomUUID } from "crypto";
 
 import { NextResponse } from "next/server";
 
 import { validateInventoryMovement } from "@/engines/warehouse";
-import { apiError } from "@/lib/api-response";
-import {
-  CorporateAuthorizationRequired,
-  requireCorporateUser,
-} from "@/lib/auth/corporate-auth";
+import { requireWarehouseCapability } from "@/lib/warehouse/access";
+import { missingIdempotencyKey, requireIdempotencyKey, warehouseApiError } from "@/lib/warehouse/api-error";
+import { parseWarehouseQuantity } from "@/lib/warehouse-quantity";
 import {
   getInventoryItemById,
   getWarehouseLocationById,
-  getWarehousePermission,
   listInventoryItems,
   listWarehouses,
 } from "@/repositories/warehouse.repository";
-import { createWarehouseMovement } from "@/repositories/warehouse-movements.repository";
-
-async function requireWarehouseMovementAccess() {
-  const user = await requireCorporateUser();
-
-  if (user.roles.includes("ADMIN")) {
-    return user;
-  }
-
-  const permission = await getWarehousePermission(user.id);
-
-  if (!permission?.canRegisterMovement || !(await hasCpanelPermission(user.id, "warehouse", "operate"))) {
-    throw new CorporateAuthorizationRequired(
-      "No tienes permiso para registrar movimientos de Almacén.",
-    );
-  }
-
-  return user;
-}
+import { createExternalReceiptOnce } from "@/repositories/warehouse-movements.repository";
 
 function createMovementFolio() {
   const now = new Date();
@@ -58,8 +35,7 @@ function cleanOptional(value: unknown) {
 
 export async function GET() {
   try {
-    await requireModulePermission("warehouse", "view");
-    await requireWarehouseMovementAccess();
+    await requireWarehouseCapability("operate");
 
     const [items, warehouses] = await Promise.all([
       listInventoryItems(),
@@ -91,14 +67,16 @@ export async function GET() {
         ),
     });
   } catch (error) {
-    return apiError(error);
+    return warehouseApiError(error);
   }
 }
 
 export async function POST(request: Request) {
   try {
-    await requireModulePermission("warehouse", "operate");
-    const user = await requireWarehouseMovementAccess();
+    // Autorización antes de leer el cuerpo; la clave de idempotencia evita entradas duplicadas por doble clic o reintento.
+    const user = await requireWarehouseCapability("operate");
+    const idempotencyKey = requireIdempotencyKey(request);
+    if (!idempotencyKey) return missingIdempotencyKey();
     const body = await request.json();
 
     const itemId =
@@ -107,7 +85,7 @@ export async function POST(request: Request) {
       typeof body.destinationLocationId === "string"
         ? body.destinationLocationId.trim()
         : "";
-    const quantity = Number(body.quantity);
+    const quantity = parseWarehouseQuantity(body.quantity).toNumber();
 
     if (!itemId) {
       return NextResponse.json(
@@ -157,10 +135,10 @@ export async function POST(request: Request) {
       );
     }
 
-    const movement = await createWarehouseMovement({
+    const data = {
       folio: createMovementFolio(),
       itemId: item.id,
-      type: "EXTERNAL_RECEIPT",
+      type: "EXTERNAL_RECEIPT" as const,
       quantity,
       unit: item.baseUnit,
       originLocationId: null,
@@ -170,30 +148,32 @@ export async function POST(request: Request) {
       notes: cleanOptional(body.notes),
       occurredAt: new Date(),
       actorId: user.id,
-    });
-
-    return NextResponse.json(
-      {
-        movement: {
-          id: movement.id,
-          folio: movement.folio,
-          itemId: movement.itemId,
-          itemCode: movement.item.code,
-          quantity: movement.quantity.toNumber(),
-          unit: movement.unit,
-          destinationLocation: movement.destinationLocation
-            ? {
-                id: movement.destinationLocation.id,
-                code: movement.destinationLocation.code,
-                warehouseName: movement.destinationLocation.warehouse.name,
-              }
-            : null,
-          occurredAt: movement.occurredAt,
-        },
+    };
+    const { response, replayed } = await createExternalReceiptOnce(data, {
+      idempotencyKey,
+      payload: { itemId: data.itemId, destinationLocationId: data.destinationLocationId, quantity: parseWarehouseQuantity(body.quantity).toFixed(3),
+        referenceType: data.referenceType, referenceNumber: data.referenceNumber, notes: data.notes },
+    }, movement => ({
+      movement: {
+        id: movement.id,
+        folio: movement.folio,
+        itemId: movement.itemId,
+        itemCode: movement.item.code,
+        quantity: movement.quantity.toNumber(),
+        unit: movement.unit,
+        destinationLocation: movement.destinationLocation
+          ? {
+              id: movement.destinationLocation.id,
+              code: movement.destinationLocation.code,
+              warehouseName: movement.destinationLocation.warehouse.name,
+            }
+          : null,
+        occurredAt: movement.occurredAt.toISOString(),
       },
-      { status: 201 },
-    );
+    }));
+
+    return NextResponse.json({ ...response, replayed }, { status: replayed ? 200 : 201 });
   } catch (error) {
-    return apiError(error);
+    return warehouseApiError(error);
   }
 }

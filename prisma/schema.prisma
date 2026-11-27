@@ -63,6 +63,9 @@ model User {
   warehouseDiscrepanciesApproved WarehouseDiscrepancy[] @relation("WarehouseDiscrepancyApprover")
   warehouseRecountsRequested WarehouseDiscrepancyRecount[] @relation("WarehouseRecountRequester")
   warehouseRecountsCompleted WarehouseDiscrepancyRecount[] @relation("WarehouseRecountCounter")
+  warehouseDiscrepancyEvents WarehouseDiscrepancyEvent[] @relation("WarehouseDiscrepancyEventActor")
+  warehouseCatalogAudits     WarehouseCatalogAudit[]     @relation("WarehouseCatalogAuditActor")
+  warehouseReconciliationExceptions WarehouseReconciliationException[] @relation("WarehouseReconciliationExceptionActor")
 }
 
 model UserRole {
@@ -642,6 +645,7 @@ model InventoryItem {
   movements   InventoryMovement[]
   warehouseCounts      WarehouseCount[]
   custodies   InventoryCustody[]
+  stockBalances InventoryStockBalance[]
 
   @@index([active, code])
 }
@@ -671,6 +675,7 @@ model WarehouseLocation {
   destinationMovements InventoryMovement[] @relation("InventoryMovementDestination")
   warehouseCounts      WarehouseCount[]
   custodies            InventoryCustody[]
+  stockBalances        InventoryStockBalance[]
 
   @@unique([warehouseId, code])
   @@index([warehouseId, active])
@@ -696,6 +701,8 @@ model InventoryMovement {
   destinationLocation   WarehouseLocation?    @relation("InventoryMovementDestination", fields: [destinationLocationId], references: [id], onDelete: Restrict)
   actor                 User                  @relation("InventoryMovementActor", fields: [actorId], references: [id], onDelete: Restrict)
   warehouseDiscrepancyAdjustment WarehouseDiscrepancy? @relation("WarehouseDiscrepancyAdjustment")
+  openedCustody         InventoryCustody?     @relation("InventoryCustodySourceMovement")
+  closedCustody         InventoryCustody?     @relation("InventoryCustodyClosingMovement")
 
   @@index([itemId, occurredAt])
   @@index([originLocationId, occurredAt])
@@ -703,6 +710,8 @@ model InventoryMovement {
   @@index([type, occurredAt])
   @@index([actorId, occurredAt])
   @@index([referenceType, referenceNumber])
+  // YF-003: orden estable de reportes y paginación por cursor (fecha, creación, id) sin ordenar todo el libro mayor.
+  @@index([occurredAt(sort: Desc), createdAt(sort: Desc), id(sort: Desc)])
 }
 
 model WarehouseStockOperation {
@@ -764,12 +773,71 @@ model InventoryCustody {
   createdBy         User                   @relation("InventoryCustodyCreator", fields: [createdById], references: [id], onDelete: Restrict)
   events            InventoryCustodyEvent[]
   operations        InventoryCustodyOperation[]
+  /// YF-003 V2: movimiento de entrega que abrió la custodia (relación explícita y única).
+  sourceMovementId  String?                @unique
+  /// YF-003 V2: movimiento que cerró la custodia regresando material a Almacén (devolución recibida o cancelación).
+  closingMovementId String?                @unique
+  /// YF-003 V2: custodia de la que se separó una devolución parcial.
+  parentCustodyId   String?
+  sourceMovement    InventoryMovement?     @relation("InventoryCustodySourceMovement", fields: [sourceMovementId], references: [id], onDelete: Restrict)
+  closingMovement   InventoryMovement?     @relation("InventoryCustodyClosingMovement", fields: [closingMovementId], references: [id], onDelete: Restrict)
+  parentCustody     InventoryCustody?      @relation("InventoryCustodySplit", fields: [parentCustodyId], references: [id], onDelete: Restrict)
+  childCustodies    InventoryCustody[]     @relation("InventoryCustodySplit")
 
   @@index([itemId, status])
   @@index([locationId, status])
   @@index([custodianAreaId, status, enteredAt])
   @@index([nextActionAreaId, status, enteredAt])
   @@index([referenceType, referenceNumber])
+  @@index([parentCustodyId])
+}
+
+/// YF-003 V2: existencia materializada por artículo y ubicación. La mantiene EXCLUSIVAMENTE un disparador del libro mayor
+/// en la misma transacción del movimiento; la aplicación nunca la escribe. El libro mayor sigue siendo la fuente de verdad
+/// (reconciliación R8 exacta y reconstrucción controlada con yf_rebuild_inventory_stock_balance()).
+model InventoryStockBalance {
+  itemId     String
+  locationId String
+  quantity   Decimal           @db.Decimal(18, 3)
+  updatedAt  DateTime          @default(now())
+  item       InventoryItem     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  location   WarehouseLocation @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@id([itemId, locationId])
+  @@index([locationId])
+}
+
+/// YF-003 V2: historial inmutable de cambios del catálogo (artículos y ubicaciones).
+model WarehouseCatalogAudit {
+  id         String   @id @default(cuid())
+  entityType String   @db.VarChar(20)
+  entityId   String
+  action     String   @db.VarChar(30)
+  before     Json?
+  after      Json?
+  reason     String
+  actorId    String
+  createdAt  DateTime @default(now())
+  actor      User     @relation("WarehouseCatalogAuditActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+/// YF-003 V2: inconsistencia histórica documentada y autorizada (p. ej. entrega antigua sin custodia). No altera el historial:
+/// la reconciliación la reporta como DOCUMENTADA en lugar de abierta.
+model WarehouseReconciliationException {
+  id          String   @id @default(cuid())
+  checkCode   String   @db.VarChar(10)
+  subjectType String   @db.VarChar(20)
+  subjectId   String
+  reason      String
+  evidence    String?
+  actorId     String
+  createdAt   DateTime @default(now())
+  actor       User     @relation("WarehouseReconciliationExceptionActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@unique([checkCode, subjectType, subjectId])
 }
 
 model InventoryCustodyEvent {
@@ -862,6 +930,7 @@ model WarehouseDiscrepancy {
   approvedQuantity Decimal? @db.Decimal(18,3)
   movementId     String? @unique
   recounts       WarehouseDiscrepancyRecount[]
+  events         WarehouseDiscrepancyEvent[]
   count          WarehouseCount @relation(fields: [countId], references: [id], onDelete: Restrict)
   assignedTo     User? @relation("WarehouseDiscrepancyInvestigator", fields: [assignedToId], references: [id], onDelete: Restrict)
   approvedBy     User? @relation("WarehouseDiscrepancyApprover", fields: [approvedById], references: [id], onDelete: Restrict)
@@ -887,6 +956,24 @@ model WarehouseDiscrepancyRecount {
   requestedBy User @relation("WarehouseRecountRequester", fields: [requestedById], references: [id], onDelete: Restrict)
   completedBy User? @relation("WarehouseRecountCounter", fields: [completedById], references: [id], onDelete: Restrict)
   @@index([discrepancyId, requestedAt])
+}
+
+// YF-003: historial inmutable de cada expediente de diferencia (clasificación, reconteos, aprobación, rechazo, cierre).
+// Permite la segregación de funciones sobre TODOS los participantes, no solo el último investigador.
+model WarehouseDiscrepancyEvent {
+  id            String   @id @default(cuid())
+  discrepancyId String
+  type          String   @db.VarChar(40)
+  fromStatus    String?  @db.VarChar(40)
+  toStatus      String?  @db.VarChar(40)
+  notes         String?
+  actorId       String
+  createdAt     DateTime @default(now())
+  discrepancy   WarehouseDiscrepancy @relation(fields: [discrepancyId], references: [id], onDelete: Restrict)
+  actor         User     @relation("WarehouseDiscrepancyEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([discrepancyId, createdAt])
+  @@index([actorId, createdAt])
 }
 
 enum WarehouseCountType {
@@ -952,6 +1039,20 @@ enum InventoryMovementType {
 
 enum WarehouseStockOperationKind {
   INTERNAL_TRANSFER
+  EXTERNAL_RECEIPT
+  OPERATIONAL_HANDOFF
+  EXTERNAL_ISSUE
+  MOVEMENT_REVERSAL
+  PRODUCTION_RECEIPT
+  RETURN_REQUEST
+  RETURN_RECEIPT
+  COUNT_LAUNCH
+  COUNT_COMPLETE
+  RECOUNT_REQUEST
+  RECOUNT_COMPLETE
+  DISCREPANCY_UPDATE
+  DISCREPANCY_APPROVAL
+  DISCREPANCY_REJECTION
 }
 
 enum PurchaseAuthorizationStatus {

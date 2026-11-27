@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import { db } from "@/lib/db";
 
 export type WarehouseMovementFilters = {
@@ -18,6 +20,8 @@ export type WarehouseInventoryBalance = {
   locationCode: string;
   locationName: string;
   quantity: number;
+  /** YF-003: true si el artículo o la ubicación están inactivos pero conservan existencia (no se ocultan). */
+  inactive?: boolean;
 };
 
 export async function getWarehousePermission(userId: string) {
@@ -125,120 +129,70 @@ export async function getInventoryMovementByFolio(folio: string) {
   });
 }
 
-export async function getInventoryBalances(): Promise<
+/**
+ * YF-003 V2 · Existencias por artículo y ubicación desde la existencia materializada (InventoryStockBalance), que el
+ * disparador del libro mayor mantiene en la misma transacción de cada movimiento (reconciliación R8 exacta).
+ * Solo filas con existencia distinta de cero; artículos o ubicaciones inactivos con existencia se devuelven marcados.
+ */
+export async function getInventoryBalances(itemId?: string): Promise<
   WarehouseInventoryBalance[]
 > {
-  const [items, locations, incoming, outgoing] = await Promise.all([
-    db.inventoryItem.findMany({
-      where: { active: true },
-      select: {
-        id: true,
-        code: true,
-        description: true,
-        baseUnit: true,
-      },
-    }),
-    db.warehouseLocation.findMany({
-      where: {
-        active: true,
-        warehouse: { active: true },
-      },
-      select: {
-        id: true,
-        code: true,
-        name: true,
-        warehouse: {
-          select: { id: true, code: true, name: true },
-        },
-      },
-    }),
-    db.inventoryMovement.groupBy({
-      by: ["itemId", "destinationLocationId"],
-      where: { destinationLocationId: { not: null } },
-      _sum: { quantity: true },
-    }),
-    db.inventoryMovement.groupBy({
-      by: ["itemId", "originLocationId"],
-      where: { originLocationId: { not: null } },
-      _sum: { quantity: true },
-    }),
-  ]);
-
-  const itemById = new Map(items.map((item) => [item.id, item]));
-  const locationById = new Map(
-    locations.map((location) => [location.id, location]),
-  );
-  const balances = new Map<string, number>();
-
-  for (const movement of incoming) {
-    if (!movement.destinationLocationId) continue;
-
-    const key = `${movement.itemId}:${movement.destinationLocationId}`;
-    const current = balances.get(key) ?? 0;
-    const quantity = movement._sum.quantity?.toNumber() ?? 0;
-    balances.set(key, current + quantity);
-  }
-
-  for (const movement of outgoing) {
-    if (!movement.originLocationId) continue;
-
-    const key = `${movement.itemId}:${movement.originLocationId}`;
-    const current = balances.get(key) ?? 0;
-    const quantity = movement._sum.quantity?.toNumber() ?? 0;
-    balances.set(key, current - quantity);
-  }
-
-  const result: WarehouseInventoryBalance[] = [];
-
-  for (const [key, quantity] of balances.entries()) {
-    const separatorIndex = key.indexOf(":");
-    const itemId = key.slice(0, separatorIndex);
-    const locationId = key.slice(separatorIndex + 1);
-    const item = itemById.get(itemId);
-    const location = locationById.get(locationId);
-
-    if (!item || !location) continue;
-
-    result.push({
-      itemId: item.id,
-      itemCode: item.code,
-      itemDescription: item.description,
-      baseUnit: item.baseUnit,
-      warehouseId: location.warehouse.id,
-      warehouseCode: location.warehouse.code,
-      warehouseName: location.warehouse.name,
-      locationId: location.id,
-      locationCode: location.code,
-      locationName: location.name,
-      quantity,
-    });
-  }
-
-  return result.sort((a, b) => {
-    const itemComparison = a.itemCode.localeCompare(b.itemCode);
-    if (itemComparison !== 0) return itemComparison;
-
-    const warehouseComparison = a.warehouseCode.localeCompare(
-      b.warehouseCode,
-    );
-    if (warehouseComparison !== 0) return warehouseComparison;
-
-    return a.locationCode.localeCompare(b.locationCode);
+  const rows = await db.$queryRaw<{
+    itemId: string; itemCode: string; itemDescription: string; baseUnit: string; itemActive: boolean;
+    warehouseId: string; warehouseCode: string; warehouseName: string; warehouseActive: boolean;
+    locationId: string; locationCode: string; locationName: string; locationActive: boolean; quantity: Prisma.Decimal;
+  }[]>`
+    SELECT b."itemId", i."code" AS "itemCode", i."description" AS "itemDescription", i."baseUnit", i."active" AS "itemActive",
+           w."id" AS "warehouseId", w."code" AS "warehouseCode", w."name" AS "warehouseName", w."active" AS "warehouseActive",
+           l."id" AS "locationId", l."code" AS "locationCode", l."name" AS "locationName", l."active" AS "locationActive", b."quantity"
+      FROM "InventoryStockBalance" b
+      JOIN "InventoryItem" i ON i."id" = b."itemId"
+      JOIN "WarehouseLocation" l ON l."id" = b."locationId"
+      JOIN "Warehouse" w ON w."id" = l."warehouseId"
+     WHERE b."quantity" <> 0 ${itemId ? Prisma.sql`AND b."itemId" = ${itemId}` : Prisma.empty}
+     ORDER BY i."code", w."code", l."code"`;
+  return rows.map((r) => {
+    const inactive = !r.itemActive || !r.locationActive || !r.warehouseActive;
+    return {
+      itemId: r.itemId, itemCode: r.itemCode, itemDescription: r.itemDescription, baseUnit: r.baseUnit,
+      warehouseId: r.warehouseId, warehouseCode: r.warehouseCode, warehouseName: r.warehouseName,
+      locationId: r.locationId, locationCode: r.locationCode, locationName: r.locationName,
+      quantity: new Prisma.Decimal(r.quantity).toNumber(),
+      ...(inactive ? { inactive: true } : {}),
+    };
   });
+}
+
+/**
+ * YF-003 V2 · Totales por artículo para la consulta habitual del inventario (sin traer cada fila artículo-ubicación).
+ * Exactos (Decimal) y leídos de la existencia materializada.
+ */
+export async function getInventoryTotals() {
+  const [rows, [occupied]] = await Promise.all([
+    db.$queryRaw<{ itemId: string; quantity: Prisma.Decimal; locations: bigint }[]>`
+      SELECT "itemId", SUM("quantity") AS quantity, COUNT(*)::bigint AS locations
+        FROM "InventoryStockBalance" WHERE "quantity" <> 0 GROUP BY "itemId"`,
+    db.$queryRaw<{ locations: bigint; lines: bigint }[]>`
+      SELECT COUNT(DISTINCT "locationId")::bigint AS locations, COUNT(*)::bigint AS lines FROM "InventoryStockBalance" WHERE "quantity" <> 0`,
+  ]);
+  return {
+    totals: rows.map(r => ({ itemId: r.itemId, quantity: new Prisma.Decimal(r.quantity), locations: Number(r.locations) })),
+    occupiedLocationCount: Number(occupied?.locations ?? 0),
+    balanceCount: Number(occupied?.lines ?? 0),
+  };
 }
 
 export async function getInventoryBalancesByItem(
   itemId: string,
 ): Promise<WarehouseInventoryBalance[]> {
-  const balances = await getInventoryBalances();
-  return balances.filter((balance) => balance.itemId === itemId);
+  return getInventoryBalances(itemId);
 }
 
 export async function getInventoryTotalByItem(itemId: string) {
   const balances = await getInventoryBalancesByItem(itemId);
 
   return balances.reduce(
-    (total, balance) => total + balance.quantity,
-    0,
-  );
+    (total, balance) => total.plus(balance.quantity),
+    new Prisma.Decimal(0),
+  ).toNumber();
 }

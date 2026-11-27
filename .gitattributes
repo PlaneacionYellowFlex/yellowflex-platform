@@ -7,3 +7,8 @@ prisma/migrations/20261104170000_operational_login_email_optional/migration.sql 
 prisma/migrations/20261109120000_food_order_exceptional_cancellation/migration.sql -text
 prisma/migrations/20261124130000_food_payroll_core/migration.sql -text
 prisma/migrations/20261124180000_food_payroll_reconciliation/migration.sql -text
+prisma/migrations/20261125120000_warehouse_stock_operation_kinds/migration.sql -text
+
+# YF-003: Preserve validated SQL bytes
+scripts/warehouse-yf003-security-qa.sql -text -filter -ident -working-tree-encoding
+prisma/migrations/20261125200000_warehouse_yf003_enterprise_v2/migration.sql -text -filter -ident -working-tree-encoding

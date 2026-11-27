@@ -5,6 +5,7 @@ import { CorporateAuthorizationRequired, requireCorporateUser } from "@/lib/auth
 import { hasCpanelPermission } from "@/lib/cpanel/authorization";
 import type { CpanelAction, CpanelModule } from "@/lib/cpanel/permission-catalog";
 import { db } from "@/lib/db";
+import { hasWarehousePageAccess } from "@/lib/warehouse/access";
 
 /** ADMIN retains governance. Every other account needs view AND the requested action. */
 export async function hasModulePermission(user: AuthenticatedUser, module: CpanelModule, action: CpanelAction = "view") {
@@ -55,6 +56,8 @@ export async function hasModulePageAccess(user: AuthenticatedUser, module: Cpane
     const employee = await db.employee.findUnique({ where: { corporateUserId: user.id }, select: { status: true } });
     return employee?.status === "ACTIVE";
   }
+  // YF-003: Warehouse usa la misma política que sus APIs (lib/warehouse/access.ts), sin atajos por rol para operar o aprobar.
+  if (module === "warehouse") return hasWarehousePageAccess(user, action, area);
   if (!(await hasModulePermission(user, module, action))) return false;
   if (module === "rrhh") return user.roles.some(role => role === "ADMIN" || role === "RH");
   if (module === "food-services" && area === "chef") return user.roles.some(role => role === "ADMIN" || role === "CHEF");
@@ -65,13 +68,6 @@ export async function hasModulePageAccess(user: AuthenticatedUser, module: Cpane
     if (permission.canViewAll) return true;
     if (!(await hasModulePermission(user, module, "operate"))) return false;
     return permission.canRequest || (permission.canManagePurchases && await hasModulePermission(user, module, "manage"));
-  }
-  if (module === "warehouse") {
-    if (user.roles.includes("ADMIN")) return true;
-    if (area === "production") return user.roles.some(role => role === "DIRECCION" || role === "PRODUCCION");
-    const permission = await db.warehousePermission.findUnique({ where: { userId: user.id } });
-    const key = area === "movement" ? "canRegisterMovement" : area === "count" ? "canManageWarehouse" : "canViewInventory";
-    return permission?.[key] === true;
   }
   return true;
 }

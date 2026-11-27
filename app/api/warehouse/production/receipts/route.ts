@@ -1,34 +1,13 @@
-import { requireModulePermission } from "@/lib/cpanel/module-access";
+import { requireWarehouseCapability } from "@/lib/warehouse/access";
 import { NextResponse } from "next/server";
 
 import { apiError } from "@/lib/api-response";
-import {
-  CorporateAuthorizationRequired,
-  requireCorporateUser,
-} from "@/lib/auth/corporate-auth";
 import { listProductionCustodiesInTransit } from "@/repositories/warehouse-custody.repository";
 
-async function requireProductionReceptionAccess() {
-  const user = await requireCorporateUser();
-
-  if (
-    user.roles.some(
-      (role) =>
-        role === "ADMIN" || role === "DIRECCION" || role === "PRODUCCION",
-    )
-  ) {
-    return user;
-  }
-
-  throw new CorporateAuthorizationRequired(
-    "No tienes permiso para recibir material de Producción.",
-  );
-}
 
 export async function GET() {
   try {
-    await requireModulePermission("warehouse", "view");
-    await requireProductionReceptionAccess();
+    await requireWarehouseCapability("productionView");
 
     const custodies = await listProductionCustodiesInTransit();
 

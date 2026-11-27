@@ -9,6 +9,7 @@ async function main() {
   let itemId: string | undefined;
   let warehouseId: string | undefined;
   let complete = false;
+  let marker = "";
   try {
     await assertIsolatedIdentity(db);
     const file = "data/qa-pilot-local-manifest.json";
@@ -23,7 +24,7 @@ async function main() {
       db.operationalArea.findUnique({ where: { code: "PRODUCCION" } }),
     ]);
     if (!warehouseArea?.active || !productionArea?.active) throw new Error("Faltan catálogos estructurales");
-    const marker = `QA-PILOT-${manifest.runId.slice(0, 8)}`;
+    marker = `QA-PILOT-${manifest.runId.slice(0, 8)}`;
     const item = await db.inventoryItem.create({ data: { code: `${marker}-ITEM`, description: `Fictitious manual pilot ${manifest.runId}`, baseUnit: "EA" } });
     itemId = item.id;
     const warehouse = await db.warehouse.create({ data: { code: `${marker}-WH`, name: marker } });
@@ -46,6 +47,7 @@ async function main() {
   } finally {
     try {
       if (!complete && itemId) await db.$transaction(async tx => {
+        await tx.$executeRawUnsafe("SELECT set_config('yellowflex.fixture_cleanup', $1, true)", marker);
         const custodies = await tx.inventoryCustody.findMany({ where: { itemId }, select: { id: true } });
         await tx.inventoryCustodyEvent.deleteMany({ where: { custodyId: { in: custodies.map(c => c.id) } } });
         await tx.inventoryCustody.deleteMany({ where: { itemId } });

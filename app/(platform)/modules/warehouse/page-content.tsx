@@ -17,7 +17,13 @@ import {
   Send,
   ShieldCheck,
   Warehouse,
+  LockKeyhole,
+  LogOut,
+  History,
+  FileSpreadsheet,
+  Scale,
 } from "lucide-react";
+import WarehouseDashboard from "@/components/warehouse/warehouse-dashboard";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -66,11 +72,24 @@ const normalize = (value: string) =>
     .toLowerCase()
     .trim();
 
+type Capabilities = { view: boolean; operate: boolean; investigate: boolean; approve: boolean; audit: boolean; production: boolean; productionView: boolean; catalog: boolean };
+
 export default function WarehousePage() {
   const [data, setData] = useState<Data | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  const [caps, setCaps] = useState<Capabilities | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/warehouse/capabilities", { credentials: "same-origin", cache: "no-store" })
+      .then(r => (r.ok ? r.json() : null))
+      .then((b: { capabilities?: Capabilities } | null) => { if (active && b?.capabilities) setCaps(b.capabilities); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+  const allowed = (key: keyof Capabilities) => (caps ? caps[key] : undefined);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -102,7 +121,8 @@ export default function WarehousePage() {
   }, []);
 
   useEffect(() => {
-    void load();
+    // La carga ocurre en una devolución asíncrona, no de forma síncrona dentro del efecto.
+    void Promise.resolve().then(load);
   }, [load]);
 
   const visible = useMemo(() => {
@@ -202,24 +222,35 @@ export default function WarehousePage() {
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <OperationCard
             href="/modules/warehouse/receipts/new"
+            allowed={allowed("operate")}
             icon={<PackagePlus className="h-5 w-5" />}
             title="Nueva entrada"
             description="Recibir material desde una fuente externa."
           />
           <OperationCard
             href="/modules/warehouse/transfers/new"
+            allowed={allowed("operate")}
             icon={<ArrowRightLeft className="h-5 w-5" />}
             title="Transferencia interna"
             description="Mover existencia entre ubicaciones controladas."
           />
           <OperationCard
             href="/modules/warehouse/handoffs/new"
+            allowed={allowed("operate")}
             icon={<Send className="h-5 w-5" />}
             title="Entregar a Producción"
             description="Liberar del Layout y abrir custodia operativa."
           />
           <OperationCard
+            href="/modules/warehouse/issues/new"
+            allowed={allowed("operate")}
+            icon={<LogOut className="h-5 w-5" />}
+            title="Salida de material"
+            description="Registrar salidas con motivo, destino y referencia."
+          />
+          <OperationCard
             href="/modules/warehouse/production/receipts"
+            allowed={allowed("production")}
             icon={<PackageCheck className="h-5 w-5" />}
             title="Recepciones pendientes"
             description="Confirmar material entregado a Producción."
@@ -227,21 +258,52 @@ export default function WarehousePage() {
 
           <OperationCard
             href="/modules/warehouse/returns"
+            allowed={allowed("operate")}
             icon={<RotateCcw className="h-5 w-5" />}
             title="Devoluciones"
             description="Recibir sobrantes y devolverlos al Layout."
           />
           <OperationCard
             href="/modules/warehouse/counts"
+            allowed={allowed("view")}
             icon={<ClipboardCheck className="h-5 w-5" />}
             title="Conteos"
             description="Conteos cíclicos, sorpresa y diferencias."
           />
           <OperationCard
             href="/modules/warehouse/discrepancies"
+            allowed={allowed("view")}
             icon={<ClipboardList className="h-5 w-5" />}
             title="Investigación de Diferencias"
             description="Investigar diferencias de conteo, documentar causas y registrar resoluciones."
+          />
+          <OperationCard
+            href="/modules/warehouse/kardex"
+            allowed={allowed("view")}
+            icon={<History className="h-5 w-5" />}
+            title="Kardex"
+            description="Historial y saldo acumulado por artículo; reversos controlados."
+          />
+          <OperationCard
+            href="/modules/warehouse/reports"
+            allowed={allowed("view")}
+            icon={<FileSpreadsheet className="h-5 w-5" />}
+            title="Reporte de movimientos"
+            description="Filtrar por fecha, tipo, artículo, ubicación o referencia y exportar."
+          />
+          <OperationCard
+            href="/modules/warehouse/reconciliation"
+            allowed={allowed("audit")}
+            icon={<Scale className="h-5 w-5" />}
+            title="Reconciliación"
+            description="Auditoría de solo lectura: existencias, custodias y expedientes."
+          />
+          <OperationCard
+            href="/modules/warehouse/catalog"
+            allowed={allowed("catalog")}
+            icon={<Boxes className="h-5 w-5" />}
+            title="Catálogo"
+            description="Artículos y ubicaciones: altas, ediciones e inactivación controlada."
           />
           <OperationCard
             icon={<ShieldCheck className="h-5 w-5" />}
@@ -251,12 +313,15 @@ export default function WarehousePage() {
           />
           <OperationCard
             href="/modules/warehouse/production/material"
+            allowed={allowed("production")}
             icon={<ClipboardList className="h-5 w-5" />}
             title="Custodias"
             description="Consumir material o devolver sobrantes desde Producción."
           />
         </div>
       </section>
+
+      {allowed("view") && <WarehouseDashboard />}
 
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
@@ -347,13 +412,38 @@ function OperationCard({
   title,
   description,
   pending = false,
+  allowed,
 }: {
   href?: string;
   icon: React.ReactNode;
   title: string;
   description: string;
   pending?: boolean;
+  /** YF-003: undefined mientras se consultan las capacidades; false muestra la tarjeta visible pero restringida. */
+  allowed?: boolean;
 }) {
+  if (!pending && href && allowed === false) {
+    return (
+      <div
+        aria-disabled="true"
+        title="Acceso restringido: solicita el permiso correspondiente al administrador de accesos."
+        className="cursor-not-allowed rounded-2xl border border-slate-200 bg-slate-50/70 p-4 opacity-80"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500">
+            {icon}
+          </div>
+          <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-amber-800">
+            <LockKeyhole className="h-3 w-3" aria-hidden="true" />
+            Acceso restringido
+          </span>
+        </div>
+        <h3 className="mt-4 font-bold text-slate-600">{title}</h3>
+        <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p>
+      </div>
+    );
+  }
+
   const content = (
     <>
       <div className="flex items-start justify-between gap-3">
@@ -377,7 +467,7 @@ function OperationCard({
     return (
       <Link
         href={href}
-        className="rounded-2xl border border-slate-200 bg-white p-4 transition hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/40 hover:shadow-sm"
+        className="cursor-pointer rounded-2xl border border-slate-200 bg-white p-4 transition hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/40 hover:shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#0b3a82]"
       >
         {content}
       </Link>

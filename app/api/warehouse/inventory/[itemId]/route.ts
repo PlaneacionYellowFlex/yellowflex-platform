@@ -1,45 +1,23 @@
-import { requireModulePermission } from "@/lib/cpanel/module-access";
-import { hasCpanelPermission } from "@/lib/cpanel/authorization";
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
-import { apiError } from "@/lib/api-response";
-import {
-  CorporateAuthorizationRequired,
-  requireCorporateUser,
-} from "@/lib/auth/corporate-auth";
+import { warehouseApiError } from "@/lib/warehouse/api-error";
+import { db } from "@/lib/db";
+import { requireWarehouseCapability } from "@/lib/warehouse/access";
 import { listActiveCustodiesByItem } from "@/repositories/warehouse-custody.repository";
 import {
   getInventoryBalancesByItem,
   getInventoryItemById,
-  getWarehousePermission,
   listInventoryMovements,
 } from "@/repositories/warehouse.repository";
 
-async function requireWarehouseInventoryAccess() {
-  const user = await requireCorporateUser();
-
-  if (user.roles.includes("ADMIN")) {
-    return user;
-  }
-
-  const permission = await getWarehousePermission(user.id);
-
-  if (!permission?.canViewInventory || !(await hasCpanelPermission(user.id, "warehouse", "view"))) {
-    throw new CorporateAuthorizationRequired(
-      "No tienes permiso para consultar el inventario de Almacén.",
-    );
-  }
-
-  return user;
-}
 
 export async function GET(
   _request: Request,
   context: { params: Promise<{ itemId: string }> },
 ) {
   try {
-    await requireModulePermission("warehouse", "view");
-    await requireWarehouseInventoryAccess();
+    await requireWarehouseCapability("view");
     const { itemId } = await context.params;
 
     const item = await getInventoryItemById(itemId);
@@ -51,20 +29,20 @@ export async function GET(
       );
     }
 
-    const [balances, movements, custodies] = await Promise.all([
+    const [balances, movements, custodies, movementTotal] = await Promise.all([
       getInventoryBalancesByItem(itemId),
       listInventoryMovements({ itemId, limit: 200 }),
       listActiveCustodiesByItem(itemId),
+      db.inventoryMovement.count({ where: { itemId } }),
     ]);
 
-    const controlledQuantity = balances.reduce(
-      (total, balance) => total + balance.quantity,
-      0,
-    );
-
-    const operationalCustodyQuantity = custodies
+    // YF-003: aritmética decimal exacta. Existencia en Almacén y custodia de Producción se reportan por separado.
+    const controlledExact = balances.reduce((total, balance) => total.plus(balance.quantity), new Prisma.Decimal(0));
+    const custodyExact = custodies
       .filter((custody) => custody.locationId === null)
-      .reduce((total, custody) => total + custody.quantity.toNumber(), 0);
+      .reduce((total, custody) => total.plus(custody.quantity), new Prisma.Decimal(0));
+    const controlledQuantity = controlledExact.toNumber();
+    const operationalCustodyQuantity = custodyExact.toNumber();
 
     return NextResponse.json({
       item: {
@@ -77,9 +55,11 @@ export async function GET(
       summary: {
         controlledQuantity,
         operationalCustodyQuantity,
-        yellowflexQuantity: controlledQuantity + operationalCustodyQuantity,
+        yellowflexQuantity: controlledExact.plus(custodyExact).toNumber(),
         locationCount: balances.filter((balance) => balance.quantity !== 0).length,
-        movementCount: movements.length,
+        // YF-003: total real (antes era el tamaño de la lista mostrada, limitada a 200). El historial completo está en el Kardex.
+        movementCount: movementTotal,
+        movementsShown: movements.length,
         custodyCount: custodies.filter((custody) => custody.locationId === null)
           .length,
       },
@@ -141,6 +121,6 @@ export async function GET(
         })),
     });
   } catch (error) {
-    return apiError(error);
+    return warehouseApiError(error);
   }
 }

@@ -253,9 +253,13 @@ export default function WarehouseItemPage() {
           />
           <Metric
             icon={<FileText className="h-4 w-4" />}
-            label="Movimientos consultados"
+            label="Movimientos registrados"
             value={qty(data.summary.movementCount)}
           />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-6 py-3 text-xs text-slate-500">
+          <span>La lista inferior muestra los movimientos más recientes. El historial completo, con saldo acumulado y exportación, está en el Kardex.</span>
+          <Link href={`/modules/warehouse/kardex?itemId=${data.item.id}`} className="rounded-lg border border-blue-900 px-3 py-1.5 font-bold text-blue-950 transition hover:bg-blue-50">Ver Kardex completo</Link>
         </div>
       </header>
 

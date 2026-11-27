@@ -11,6 +11,8 @@ import {
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
+import { useSubmitGuard } from "@/components/warehouse/use-submit-guard";
+
 type Item = {
   id: string;
   code: string;
@@ -60,6 +62,7 @@ export default function NewWarehouseReceiptPage() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const guard = useSubmitGuard();
   const [error, setError] = useState("");
   const [created, setCreated] = useState<CreatedMovement | null>(null);
 
@@ -126,25 +129,20 @@ export default function NewWarehouseReceiptPage() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (saving) return;
+    if (!guard.begin()) return;
 
     setSaving(true);
     setError("");
     setCreated(null);
 
+    const payload = { itemId, quantity, destinationLocationId, referenceType, referenceNumber, notes };
+    const { key, fingerprint } = guard.key(payload);
     try {
       const response = await fetch("/api/warehouse/movements", {
         method: "POST",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          itemId,
-          quantity,
-          destinationLocationId,
-          referenceType,
-          referenceNumber,
-          notes,
-        }),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+        body: JSON.stringify(payload),
       });
 
       const body = await response.json();
@@ -153,6 +151,7 @@ export default function NewWarehouseReceiptPage() {
         throw new Error(body.error || "No fue posible registrar la entrada.");
       }
 
+      guard.confirm(fingerprint);
       setCreated(body.movement);
     } catch (submitError) {
       setError(
@@ -161,6 +160,7 @@ export default function NewWarehouseReceiptPage() {
           : "No fue posible registrar la entrada.",
       );
     } finally {
+      guard.end();
       setSaving(false);
     }
   }

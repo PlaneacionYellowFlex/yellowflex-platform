@@ -1,4 +1,4 @@
-const test = require('node:test');
+/* eslint-disable @typescript-eslint/no-require-imports */
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const path = require('node:path');
@@ -62,13 +62,15 @@ function harness({ roles = ['ADMIN'], temporary = false, granted = false, employ
     'lib/food-services/self-service.ts', 'lib/food-services/reference-date.ts', 'lib/food-services/employee-session.ts', 'lib/purchases/purchase-permissions.ts',
     'app/api/auth/change-password/route.ts', 'app/api/auth/logout/route.ts',
     'app/api/admin/corporate-access/route.ts', 'app/api/food-services/hr/billing/route.ts',
+    // YF-003: política central de Warehouse y administración de permisos operativos de Almacén.
+    'lib/warehouse/access.ts', 'lib/warehouse/capabilities.ts', 'lib/warehouse/api-error.ts', 'lib/warehouse/folio.ts', 'app/api/admin/cpanel/warehouse-permissions/route.ts',
     'app/api/food-services/hr/billing/export/route.ts', 'app/api/food-services/hr/extraordinary/route.ts',
   ]);
   function load(file) {
     assert.ok(allowed.has(file) || realFoodServices && /^lib\/food-services\/[^/]+\.ts$/.test(file) || /^(app\/api\/(warehouse|rrhh|purchases|food-services|hr)\/.*route\.ts|app\/api\/oee\/route\.ts|app\/api\/admin\/cpanel\/permissions\/route\.ts|lib\/cpanel\/module-page-access\.tsx)$/.test(file), `Unexpected production dependency: ${file}`);
     if (cache.has(file)) return cache.get(file).exports;
-    const module = { exports: {} };
-    cache.set(file, module);
+    const mod = { exports: {} };
+    cache.set(file, mod);
     const source = readFileSync(path.join(root, file), 'utf8');
     const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS,
       target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
@@ -86,13 +88,13 @@ function harness({ roles = ['ADMIN'], temporary = false, granted = false, employ
         return new Proxy({}, { get: (_, name) => { if (name === '__esModule') return true; return function UnexpectedDataAccess() { calls.services++; throw new Error(`Unexpected data access: ${id}.${String(name)}`); }; } });
       }
       if (id === '@/lib/hr/request-config') return { HR_REQUEST_TYPES: {}, isHrRequestType: () => true };
-      if (id === '@/lib/warehouse-idempotency') return { operationIdentity: () => null };
+      if (id === '@/lib/warehouse-idempotency') return { operationIdentity: () => null, isSerializationConflict: () => false, isUniqueConflict: () => false };
       if (['node:crypto', 'crypto', 'zod'].includes(id)) return require(id);
       if (id.startsWith('@/')) return load(`${id.slice(2)}.ts`);
       throw new Error(`Unexpected dependency: ${id}`);
     }
-    new Function('require', 'module', 'exports', output)(isolatedRequire, module, module.exports);
-    return module.exports;
+    new Function('require', 'module', 'exports', output)(isolatedRequire, mod, mod.exports);
+    return mod.exports;
   }
   return { load, calls, user, store, db, mocks };
 }
